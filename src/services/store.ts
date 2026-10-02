@@ -32,7 +32,9 @@ import {
 import { db } from './firebase';
 import { doc, setDoc, getDoc, deleteDoc, collection, onSnapshot } from 'firebase/firestore';
 
-const BACKEND_URL = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_BACKEND_URL) ? (import.meta as any).env.VITE_BACKEND_URL.replace(/\/+$/, '') : 'http://localhost:5001';
+const BACKEND_URL = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_BACKEND_URL) 
+  ? (import.meta as any).env.VITE_BACKEND_URL.replace(/\/+$/, '') 
+  : (typeof window !== 'undefined' && window.location.hostname === 'localhost' ? 'http://localhost:5001' : '');
 
 type Listener = () => void;
 
