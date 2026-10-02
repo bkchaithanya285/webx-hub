@@ -12,6 +12,9 @@
     "lint": "tsc --noEmit",
     "preview": "vite preview"
   },
+  "engines": {
+    "node": ">=20.x"
+  },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
     "firebase": "^11.3.0",
