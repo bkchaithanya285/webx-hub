@@ -32,6 +32,8 @@ import {
 import { db } from './firebase';
 import { doc, setDoc, getDoc, deleteDoc, collection, onSnapshot } from 'firebase/firestore';
 
+const BACKEND_URL = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_BACKEND_URL) ? (import.meta as any).env.VITE_BACKEND_URL.replace(/\/+$/, '') : 'http://localhost:5001';
+
 type Listener = () => void;
 
 class EventStore {
@@ -91,7 +93,7 @@ class EventStore {
     if (typeof window !== 'undefined') {
       const syncBackend = async () => {
         try {
-          const res = await fetch('http://localhost:5001/api/syncState', { signal: AbortSignal.timeout(1000) });
+          const res = await fetch(`${BACKEND_URL}/api/syncState`, { signal: AbortSignal.timeout(1000) });
           if (res.ok) {
             const data = await res.json();
             let changed = false;
@@ -880,7 +882,7 @@ class EventStore {
     // Local cross-browser backend sync
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/selectProblemStatement', {
+        fetch(`${BACKEND_URL}/api/selectProblemStatement`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ teamId: cleanTeamId, problemStatementId, actorUid })
@@ -986,7 +988,7 @@ class EventStore {
 
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/adminAssignProblemStatement', {
+        fetch(`${BACKEND_URL}/api/adminAssignProblemStatement`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ teamId: cleanTeamId, problemStatementId, adminEmail, actorUid: adminUid })
@@ -1103,7 +1105,7 @@ class EventStore {
     // Authoritative Single Source of Truth write to problemSelectionControl/current & Backend API
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/selectionSettings', {
+        fetch(`${BACKEND_URL}/api/selectionSettings`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(this.selectionSettings)
@@ -2099,7 +2101,7 @@ class EventStore {
 
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/addReviewer', {
+        fetch(`${BACKEND_URL}/api/addReviewer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ reviewer: newRev })
@@ -2125,7 +2127,7 @@ class EventStore {
 
       if (typeof window !== 'undefined') {
         try {
-          fetch('http://localhost:5001/api/toggleReviewerActive', {
+          fetch(`${BACKEND_URL}/api/toggleReviewerActive`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ revUid, active: rev.active })
@@ -2153,7 +2155,7 @@ class EventStore {
 
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/deleteReviewer', {
+        fetch(`${BACKEND_URL}/api/deleteReviewer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ revUid })
@@ -2191,7 +2193,7 @@ class EventStore {
 
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/addVolunteer', {
+        fetch(`${BACKEND_URL}/api/addVolunteer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ volunteer: newVol })
@@ -2217,7 +2219,7 @@ class EventStore {
 
       if (typeof window !== 'undefined') {
         try {
-          fetch('http://localhost:5001/api/toggleVolunteerActive', {
+          fetch(`${BACKEND_URL}/api/toggleVolunteerActive`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ volUid, active: vol.active })
@@ -2245,7 +2247,7 @@ class EventStore {
 
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/deleteVolunteer', {
+        fetch(`${BACKEND_URL}/api/deleteVolunteer`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ volUid })
@@ -2407,7 +2409,7 @@ class EventStore {
     // Local cross-browser backend sync
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/unselectProblem', {
+        fetch(`${BACKEND_URL}/api/unselectProblem`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ teamId: cleanTeamId })
@@ -2436,7 +2438,7 @@ class EventStore {
     // Local cross-browser backend sync
     if (typeof window !== 'undefined') {
       try {
-        fetch('http://localhost:5001/api/resetAllProblemSelections', {
+        fetch(`${BACKEND_URL}/api/resetAllProblemSelections`, {
           method: 'POST'
         }).catch(() => {});
       } catch (e) {}
