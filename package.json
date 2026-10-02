@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "dev:backend": "npm --prefix backend run serve",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node postbuild.cjs",
     "build:backend": "npm --prefix backend run build",
     "build:all": "npm run build && npm run build:backend",
     "lint": "tsc --noEmit",
