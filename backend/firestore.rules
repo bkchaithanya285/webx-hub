@@ -1,0 +1,131 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == 'bkrishnachaitanya285@gmail.com' ||
+        request.auth.token.email == 'taruntej161413@gmail.com'
+      );
+    }
+
+    function isReviewer() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/reviewers/$(request.auth.uid));
+    }
+
+    function isTeamLead(teamId) {
+      return isAuthenticated() && request.auth.uid == get(/databases/$(database)/documents/teams/$(teamId)).data.teamLeadAuthUid;
+    }
+
+    // Admins Collection
+    match /admins/{adminId} {
+      allow read, write: if isAdmin();
+    }
+
+    // App Settings
+    match /appSettings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Selection Settings (Time & Release controls)
+    match /selectionSettings/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Problem Statements
+    match /problemStatements/{psId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Problem Statement Allocations
+    match /problemStatementAllocations/{psId} {
+      allow read: if true;
+      allow write: if isAdmin(); // Handled via Cloud Function transaction for teams
+    }
+
+    // Problem Selections
+    match /problemSelections/{teamId} {
+      allow read: if isAdmin() || isTeamLead(teamId);
+      allow write: if isAdmin(); // Written via atomic Cloud Function
+    }
+
+    // Teams Collection
+    match /teams/{teamId} {
+      allow read: if true;
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Team Members
+    match /teamMembers/{memberId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Attendance Sessions
+    match /attendanceSessions/{sessionId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Attendance Records
+    match /attendanceRecords/{recordId} {
+      allow read: if isAdmin() || isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.submitted == true;
+      allow update: if isAdmin(); // Volunteers cannot edit once submitted
+      allow delete: if isAdmin();
+    }
+
+    // Reviewers Allowlist
+    match /reviewers/{reviewerId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Review Settings
+    match /reviewSettings/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Review Marks (Strict Privacy: Reviewers only access their own submissions)
+    match /reviewMarks/{markId} {
+      allow read: if isAdmin() || (isReviewer() && resource.data.reviewerUid == request.auth.uid);
+      allow create: if isReviewer() && request.resource.data.reviewerUid == request.auth.uid;
+      allow update: if false; // Marks lock upon submission
+      allow delete: if isAdmin();
+    }
+
+    // Normalized Scores (Admin privileged only)
+    match /normalizedScores/{scoreId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Leaderboard (Admin privileged only)
+    match /leaderboard/{teamId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Device Sessions
+    match /deviceSessions/{teamId} {
+      allow read: if isAdmin() || isTeamLead(teamId);
+      allow write: if isAdmin() || isAuthenticated();
+    }
+
+    // Audit Logs
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Immutable
+    }
+  }
+}

@@ -1,0 +1,147 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == 'bkrishnachaitanya285@gmail.com' ||
+        request.auth.token.email == 'taruntej161413@gmail.com'
+      );
+    }
+
+    function isVolunteer() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/volunteers/$(request.auth.uid));
+    }
+
+    function isReviewer() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/reviewers/$(request.auth.uid));
+    }
+
+    function isTeamLead(teamId) {
+      return isAuthenticated() && request.auth.uid == get(/databases/$(database)/documents/teams/$(teamId)).data.teamLeadAuthUid;
+    }
+
+    // Admins Collection - Admin Only
+    match /admins/{adminId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // App Settings - Admin Only Writes
+    match /appSettings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Selection Settings & Problem Selection Control (Protected Critical Control State - Admin Only)
+    match /selectionSettings/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /problemSelectionControl/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Problem Statements Catalog - Admin Only Writes
+    match /problemStatements/{psId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Problem Statement Allocations - Read Public, Write Admin Only (Teams write via Backend Cloud Functions)
+    match /problemStatementAllocations/{psId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Problem Selections - Read Public, Write Admin Only (Teams select via Backend Cloud Functions)
+    match /problemSelections/{teamId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Teams Collection - Read Public, Write Admin Only
+    match /teams/{teamId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Team Members - Admin Only Writes
+    match /teamMembers/{memberId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Attendance Sessions - Read Public, Write Admin Only
+    match /attendanceSessions/{sessionId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Attendance Records (Volunteers submit once, Admin only edit/delete)
+    match /attendanceRecords/{recordId} {
+      allow read: if isAdmin() || isAuthenticated();
+      allow create: if (isAdmin() || isVolunteer()) && request.resource.data.submitted == true;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Volunteers Registry
+    match /volunteers/{volunteerId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Reviewers Allowlist
+    match /reviewers/{reviewerId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Review Settings - Admin Only Writes
+    match /reviewSettings/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Review Marks (Strict Privacy: Reviewers only create their own marks once)
+    match /reviewMarks/{markId} {
+      allow read: if isAdmin() || (isReviewer() && resource.data.reviewerUid == request.auth.uid);
+      allow create: if isReviewer() && request.resource.data.reviewerUid == request.auth.uid;
+      allow update: if false; // Immutable once submitted
+      allow delete: if isAdmin();
+    }
+
+    // Normalized Scores (Admin privileged only)
+    match /normalizedScores/{scoreId} {
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Leaderboard (Public read for broadcast, Admin privileged write)
+    match /leaderboard/{teamId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Device Sessions (Protected Single Session Tracker)
+    match /deviceSessions/{teamId} {
+      allow read: if isAdmin() || isTeamLead(teamId);
+      allow write: if isAdmin() || isTeamLead(teamId);
+    }
+
+    // Audit Logs (Strictly Immutable)
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+  }
+}

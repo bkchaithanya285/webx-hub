@@ -1,0 +1,46 @@
+name: WEBX COMMAND — Automated CI & Verification Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  validate-and-build:
+    name: Lint, Test & Build Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Typecheck Frontend
+        run: npx tsc --noEmit
+
+      - name: Build Backend Service
+        run: npm run build:backend
+
+      - name: Run Test Suite 1 — All-Logins & Authentication
+        run: node scripts/testAllLogins.js
+
+      - name: Run Test Suite 2 — Timer Synchronization & Edge Cases
+        run: node scripts/testTimerEdgeCases.js
+
+      - name: Run Test Suite 3 — Problem Statement Selection Flow & Capacity Limits
+        run: npx tsx scripts/testProblemSelectionFlow.ts
+
+      - name: Run Test Suite 4 — Attendance Lifecycle, Normalization & Single-Device Auth
+        run: npx tsx scripts/testRankingAndAttendance.ts
+
+      - name: Build Production Frontend Bundle
+        run: npm run build
