@@ -1,7 +1,17 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 
-admin.initializeApp();
+const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || "webx-hub";
+
+if (!admin.apps.length) {
+  try {
+    admin.initializeApp({
+      projectId: PROJECT_ID
+    });
+  } catch (e) {
+    admin.initializeApp();
+  }
+}
 const db = admin.firestore();
 
 const ADMIN_EMAILS = [
