@@ -55,22 +55,22 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Problem Statement Allocations - Read Public, Write Admin Only (Teams write via Backend Cloud Functions)
+    // Problem Statement Allocations - Read Public, Write Authenticated / Admin
     match /problemStatementAllocations/{psId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAuthenticated() || isAdmin();
     }
 
-    // Problem Selections - Read Public, Write Admin Only (Teams select via Backend Cloud Functions)
+    // Problem Selections - Read Public, Write Authenticated / Admin (Teams select and persist problem statement)
     match /problemSelections/{teamId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAuthenticated() || isAdmin();
     }
 
-    // Teams Collection - Read Public, Write Admin Only
+    // Teams Collection - Read Public, Write Authenticated / Admin
     match /teams/{teamId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAuthenticated() || isAdmin();
     }
 
     // Team Members - Admin Only Writes

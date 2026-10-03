@@ -71,6 +71,20 @@ class EventStore {
 
     // Initialize with clean in-memory defaults
     this.initializeDefaults();
+
+    // Load any saved persistent selections from localStorage
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('webx_persistent_selections_v5');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed && typeof parsed === 'object') {
+            this.problemSelections = { ...this.problemSelections, ...parsed };
+          }
+        }
+      } catch (e) {}
+    }
+
     this.repairDataConsistency();
     this.rebuildLeaderboardInternal();
 
@@ -109,17 +123,11 @@ class EventStore {
               const remoteKeys = Object.keys(data.problemSelections);
               for (const k of remoteKeys) {
                 const rec = data.problemSelections[k];
-                if (rec && (!this.problemSelections[k] || this.problemSelections[k].problemStatementId !== rec.problemStatementId)) {
+                if (rec && rec.active && (!this.problemSelections[k] || this.problemSelections[k].problemStatementId !== rec.problemStatementId)) {
                   this.problemSelections[k] = rec;
                   changed = true;
                 }
               }
-              Object.keys(this.problemSelections).forEach(k => {
-                if (data.problemSelections[k] === undefined && remoteKeys.length === 0) {
-                  delete this.problemSelections[k];
-                  changed = true;
-                }
-              });
             }
 
             if (data.reviewers && Array.isArray(data.reviewers)) {
@@ -389,12 +397,12 @@ class EventStore {
   public repairDataConsistency() {
     let changed = false;
 
-    // 1. Sync teams with problemSelections
+    // 1. Sync teams with problemSelections bidirectionally (never wipe selections)
     this.teams.forEach((t, idx) => {
       const cleanTeamId = t.teamId.toUpperCase();
       const existingSel = this.problemSelections[cleanTeamId] || this.problemSelections[t.teamId];
 
-      if (existingSel && existingSel.active) {
+      if (existingSel && existingSel.active && existingSel.problemStatementId) {
         if (t.problemStatementId !== existingSel.problemStatementId) {
           this.teams[idx] = {
             ...t,
@@ -403,15 +411,18 @@ class EventStore {
           };
           changed = true;
         }
-      } else {
-        if (t.problemStatementId !== null) {
-          this.teams[idx] = {
-            ...t,
-            problemStatementId: null,
-            problemSelectedAt: null
-          };
-          changed = true;
-        }
+      } else if (t.problemStatementId) {
+        // Re-populate problemSelections from team if missing
+        this.problemSelections[cleanTeamId] = {
+          teamId: cleanTeamId,
+          teamName: t.teamName,
+          problemStatementId: t.problemStatementId,
+          psTitle: t.problemStatementId,
+          selectedAt: t.problemSelectedAt || new Date().toISOString(),
+          selectedBy: t.teamLeadAuthUid || 'team_lead',
+          active: true
+        };
+        changed = true;
       }
     });
 
@@ -558,14 +569,21 @@ class EventStore {
         auditLogs: this.auditLogs
       };
 
-      // 1. BroadcastChannel: Sub-millisecond instant cross-tab sync in memory without touching localStorage
+      // 1. Persist selection snapshot to localStorage for reliable restoration
+      if (typeof localStorage !== 'undefined') {
+        try {
+          localStorage.setItem('webx_persistent_selections_v5', JSON.stringify(this.problemSelections));
+        } catch (e) {}
+      }
+
+      // 2. BroadcastChannel: Sub-millisecond instant cross-tab sync in memory
       if (this.broadcastChannel) {
         try {
           this.broadcastChannel.postMessage({ type: 'STORE_MUTATED', state });
         } catch (e) {}
       }
 
-      // 2. Custom window event for same-tab listeners
+      // 3. Custom window event for same-tab listeners
       if (typeof window !== 'undefined' && window.dispatchEvent) {
         try {
           window.dispatchEvent(new CustomEvent('webx_store_updated', { detail: { timestamp: Date.now() } }));

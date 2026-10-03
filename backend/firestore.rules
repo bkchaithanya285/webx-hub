@@ -48,19 +48,19 @@ service cloud.firestore {
     // Problem Statement Allocations
     match /problemStatementAllocations/{psId} {
       allow read: if true;
-      allow write: if isAdmin(); // Handled via Cloud Function transaction for teams
+      allow write: if isAuthenticated() || isAdmin();
     }
 
     // Problem Selections
     match /problemSelections/{teamId} {
-      allow read: if isAdmin() || isTeamLead(teamId);
-      allow write: if isAdmin(); // Written via atomic Cloud Function
+      allow read: if true;
+      allow write: if isAuthenticated() || isAdmin();
     }
 
     // Teams Collection
     match /teams/{teamId} {
       allow read: if true;
-      allow create, update, delete: if isAdmin();
+      allow write: if isAuthenticated() || isAdmin();
     }
 
     // Team Members
