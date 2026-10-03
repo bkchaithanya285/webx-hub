@@ -759,6 +759,107 @@ const handleSubmitAttendance = async (req: express.Request, res: express.Respons
 
 app.post(["/submitAttendance", "/api/submitAttendance", "/webx-hub/us-central1/submitAttendance"], handleSubmitAttendance);
 
+const handleOverrideMemberAttendance = async (req: express.Request, res: express.Response) => {
+  try {
+    const { sessionId, teamId, memberId, newStatus, reason, adminEmail = "admin@klu.ac.in" } = getReqData(req);
+    if (!sessionId || !teamId || !memberId || !newStatus) {
+      return res.status(400).json({ error: "Missing required override parameters." });
+    }
+    const recordKey = `${sessionId}_${teamId}`;
+    try {
+      const recordRef = db.doc(`attendanceRecords/${recordKey}`);
+      const recordDoc = await recordRef.get();
+      if (recordDoc.exists) {
+        const data = recordDoc.data()!;
+        const updatedMembers = (data.members || []).map((m: any) => {
+          if (m.memberId === memberId) {
+            return {
+              ...m,
+              status: newStatus,
+              present: newStatus === "PRESENT",
+              overridden: true,
+              overrideReason: reason || "Admin override",
+              overriddenBy: adminEmail,
+              overriddenAt: new Date().toISOString()
+            };
+          }
+          return m;
+        });
+        await recordRef.update({ members: updatedMembers, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      }
+    } catch (e) {}
+
+    return res.json({ result: { success: true, recordKey }, data: { success: true, recordKey } });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+app.post(["/overrideMemberAttendance", "/api/overrideMemberAttendance", "/webx-hub/us-central1/overrideMemberAttendance"], handleOverrideMemberAttendance);
+
+const handleSubmitReviewMarks = async (req: express.Request, res: express.Response) => {
+  try {
+    const { round, teamId, rawScore, rubric, feedback, reviewerUid = "reviewer", reviewerName = "Reviewer" } = getReqData(req);
+    if (typeof rawScore !== "number" || isNaN(rawScore) || rawScore < 0 || rawScore > 100) {
+      return res.status(400).json({ error: "Raw marks must be a number between 0 and 100." });
+    }
+    if (!teamId || !round) {
+      return res.status(400).json({ error: "Missing round or teamId." });
+    }
+
+    const markKey = `R${round}_${teamId}_${reviewerUid}`;
+    try {
+      const markRef = db.doc(`reviewMarks/${markKey}`);
+      await markRef.set({
+        id: markKey,
+        round,
+        teamId,
+        reviewerUid,
+        reviewerName,
+        rawScore,
+        rubric: rubric || null,
+        feedback: (feedback || "").trim(),
+        submittedAt: admin.firestore.FieldValue.serverTimestamp(),
+        status: "locked"
+      });
+      await autoRecalculateNormalization(round, reviewerUid);
+    } catch (e) {}
+
+    return res.json({ result: { success: true, markKey }, data: { success: true, markKey } });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+app.post(["/submitReviewMarks", "/api/submitReviewMarks", "/webx-hub/us-central1/submitReviewMarks"], handleSubmitReviewMarks);
+
+const handleAdminUpdateReviewMark = async (req: express.Request, res: express.Response) => {
+  try {
+    const { round, teamId, reviewerUid, newRawScore, reason } = getReqData(req);
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: "Reason for score change is strictly required." });
+    }
+    if (typeof newRawScore !== "number" || isNaN(newRawScore) || newRawScore < 0 || newRawScore > 100) {
+      return res.status(400).json({ error: "Marks must be between 0 and 100." });
+    }
+    const markKey = `R${round}_${teamId}_${reviewerUid}`;
+    try {
+      const markRef = db.doc(`reviewMarks/${markKey}`);
+      await markRef.update({
+        rawScore: newRawScore,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+      await autoRecalculateNormalization(round, reviewerUid);
+    } catch (e) {}
+
+    return res.json({ result: { success: true, markKey }, data: { success: true, markKey } });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+};
+
+app.post(["/adminUpdateReviewMark", "/api/adminUpdateReviewMark", "/webx-hub/us-central1/adminUpdateReviewMark"], handleAdminUpdateReviewMark);
+
 app.get(["/attendance/active", "/api/attendance/active"], async (req, res) => {
   try {
     const snap = await db.collection("attendanceSessions").where("status", "==", "ACTIVE").limit(1).get();
@@ -768,6 +869,16 @@ app.get(["/attendance/active", "/api/attendance/active"], async (req, res) => {
     return res.json({ active: true, session: snap.docs[0].data() });
   } catch (err: any) {
     return res.json({ active: false, session: null, message: "No active session or offline mode" });
+  }
+});
+
+app.get(["/leaderboard", "/api/leaderboard"], async (req, res) => {
+  try {
+    const snap = await db.collection("leaderboard").orderBy("rank", "asc").get();
+    const entries = snap.docs.map(doc => doc.data());
+    return res.json({ success: true, leaderboard: entries });
+  } catch (err: any) {
+    return res.json({ success: true, leaderboard: [], offline: true });
   }
 });
 
