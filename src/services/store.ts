@@ -2062,6 +2062,85 @@ class EventStore {
     return { success: true };
   }
 
+  // RESET REVIEW MARKS FOR A TEAM IN A GIVEN ROUND (RETURNS TEAM TO PENDING EVALUATION)
+  public resetReviewMark(
+    actorUid: string,
+    actorName: string,
+    actorRole: 'reviewer' | 'admin',
+    round: number,
+    teamId: string,
+    targetReviewerUid?: string
+  ): { success: boolean; error?: string } {
+    const roundKey = `round${round}Status` as 'round1Status' | 'round2Status' | 'round3Status';
+    if (this.reviewSettings[roundKey] !== 'OPEN' && actorRole !== 'admin') {
+      return { success: false, error: `Round ${round} is currently CLOSED by Administrator.` };
+    }
+
+    const keysToDelete: string[] = [];
+    const affectedReviewerUids = new Set<string>();
+
+    Object.entries(this.reviewMarks).forEach(([key, mark]) => {
+      if (mark.round === round && mark.teamId.toUpperCase() === teamId.toUpperCase()) {
+        if (!targetReviewerUid || mark.reviewerUid === targetReviewerUid || actorRole === 'admin') {
+          keysToDelete.push(key);
+          affectedReviewerUids.add(mark.reviewerUid);
+        }
+      }
+    });
+
+    if (keysToDelete.length === 0) {
+      const rev = targetReviewerUid || actorUid;
+      const directKey = `R${round}_${teamId}_${rev}`;
+      if (this.reviewMarks[directKey]) {
+        keysToDelete.push(directKey);
+        affectedReviewerUids.add(rev);
+      } else {
+        return { success: false, error: `No submitted evaluation found for Team ${teamId} in Round ${round}.` };
+      }
+    }
+
+    keysToDelete.forEach(key => {
+      delete this.reviewMarks[key];
+      delete this.normalizedScores[key];
+      if (typeof window !== 'undefined' && db) {
+        try {
+          deleteDoc(doc(db, 'reviewMarks', key)).catch(() => {});
+          deleteDoc(doc(db, 'normalizedScores', key)).catch(() => {});
+        } catch (e) {}
+      }
+    });
+
+    affectedReviewerUids.forEach(revUid => {
+      const remainingForRev = Object.values(this.reviewMarks).filter(
+        m => m.round === round && m.reviewerUid === revUid
+      );
+      if (remainingForRev.length > 0) {
+        this.autoRecalculateNormalizationForReviewer(round, revUid);
+      }
+    });
+
+    this.rebuildLeaderboardInternal();
+
+    this.addAuditLog(
+      actorUid,
+      actorName,
+      actorRole,
+      'RESET_REVIEW_MARKS',
+      'review',
+      `R${round}_${teamId}`,
+      {
+        round,
+        teamId,
+        actorRole,
+        deletedMarksCount: keysToDelete.length,
+        timestamp: new Date().toISOString()
+      }
+    );
+
+    this.save();
+    return { success: true };
+  }
+
   // POST-ROUND NORMALIZATION BATCH AUDIT
   public normalizeRoundScores(adminUid: string, adminEmail: string, round: number): { success: boolean; count: number } {
     const roundMarks = Object.values(this.reviewMarks).filter(m => m.round === round);

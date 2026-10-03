@@ -8,20 +8,17 @@ import {
   CheckCircle2,
   AlertTriangle,
   Lock,
-  Layers,
   Sparkles,
   Sliders,
-  FileCode2,
   ArrowRight,
-  ShieldCheck,
   EyeOff,
-  User,
   Users,
   RefreshCw,
-  Edit3,
   Check,
   ListFilter,
-  CheckCircle
+  CheckCircle,
+  RotateCcw,
+  ShieldAlert
 } from 'lucide-react';
 
 type FilterTab = 'incomplete' | 'completed' | 'all';
@@ -50,7 +47,20 @@ export const ReviewerPortal: React.FC = () => {
   const [memberFeedback, setMemberFeedback] = useState<Record<string, string>>({});
   
   const [submitting, setSubmitting] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Modal & Flow states
+  const [showConfirmSubmitModal, setShowConfirmSubmitModal] = useState(false);
+  const [submissionSuccessData, setSubmissionSuccessData] = useState<{
+    teamId: string;
+    teamName: string;
+    score: number;
+    memberCount?: number;
+    nextPendingTeamId?: string;
+    nextPendingTeamName?: string;
+  } | null>(null);
+  const [teamToReset, setTeamToReset] = useState<Team | null>(null);
 
   const activeRound = reviewSettings.activeRound || 1;
   const currentEffectiveTeamScore = activeRound === 2 ? directTeamScore : (innovation + techFeasibility + uiUxArchitecture + presentationImpact);
@@ -76,18 +86,6 @@ export const ReviewerPortal: React.FC = () => {
     return set;
   }, [reviewMarks, activeRound]);
 
-  // Evaluated specifically by this logged-in reviewer
-  const myEvaluatedTeamIds = useMemo(() => {
-    const set = new Set<string>();
-    if (!currentUser) return set;
-    reviewMarks.forEach(m => {
-      if (m.round === activeRound && m.reviewerUid === currentUser.uid) {
-        set.add(m.teamId);
-      }
-    });
-    return set;
-  }, [reviewMarks, activeRound, currentUser?.uid]);
-
   // Filtered teams based on tab & search query
   const filteredTeams = useMemo(() => {
     let list = teams;
@@ -112,12 +110,18 @@ export const ReviewerPortal: React.FC = () => {
     return filteredTeams[0] || teams[0];
   }, [teams, selectedTeamId, filteredTeams]);
 
-  // Update selected team if the active selection gets filtered out
-  useEffect(() => {
-    if (filteredTeams.length > 0 && !filteredTeams.some(t => t.teamId === selectedTeamId)) {
-      setSelectedTeamId(filteredTeams[0].teamId);
-    }
-  }, [filteredTeams, selectedTeamId]);
+  // Handle explicit selection from left list
+  const handleSelectTeam = (teamId: string) => {
+    setSelectedTeamId(teamId);
+    setSubmissionSuccessData(null);
+  };
+
+  // Handle "Take Review for Next Team" action
+  const handleTakeReviewForNextTeam = (nextTeamId: string) => {
+    setSelectedTeamId(nextTeamId);
+    setSubmissionSuccessData(null);
+    setFilterTab('incomplete');
+  };
 
   // Load existing marks or initialize when team or round changes
   useEffect(() => {
@@ -247,8 +251,8 @@ export const ReviewerPortal: React.FC = () => {
     ? Math.round(memberScoresArray.reduce((acc, s) => acc + s, 0) / memberScoresArray.length) 
     : currentEffectiveTeamScore;
 
-  // Submit Score Handler
-  const handleSubmitScore = (e: React.FormEvent) => {
+  // Step 1: Trigger confirmation modal before submitting marks
+  const handleInitiateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentTeam) return;
 
@@ -263,8 +267,17 @@ export const ReviewerPortal: React.FC = () => {
       return;
     }
 
+    setShowConfirmSubmitModal(true);
+  };
+
+  // Step 2: Confirmed submission action
+  const handleConfirmSubmitScore = () => {
+    if (!currentTeam || !currentUser) return;
+
     setSubmitting(true);
     setNotice(null);
+
+    const finalTeamScore = currentEffectiveTeamScore;
 
     // Build member scores array if Round 2
     let payloadMemberScores: MemberReviewScore[] | undefined = undefined;
@@ -301,20 +314,58 @@ export const ReviewerPortal: React.FC = () => {
     );
 
     setSubmitting(false);
+    setShowConfirmSubmitModal(false);
 
     if (!res.success) {
       setNotice({ type: 'error', message: res.error || "Failed to submit marks." });
     } else {
-      setNotice({
-        type: 'success',
-        message: `Evaluation submitted & locked for ${currentTeam.teamId}! Team score: ${finalTeamScore}/100. Team moved to Completed.`
+      // Find next remaining pending team
+      const remainingIncomplete = teams.filter(t => t.teamId !== currentTeam.teamId && !roundEvaluatedTeamIds.has(t.teamId));
+      const nextPending = remainingIncomplete.length > 0 ? remainingIncomplete[0] : null;
+
+      setSubmissionSuccessData({
+        teamId: currentTeam.teamId,
+        teamName: currentTeam.teamName,
+        score: finalTeamScore,
+        memberCount: currentTeam.members.length,
+        nextPendingTeamId: nextPending?.teamId,
+        nextPendingTeamName: nextPending?.teamName
       });
 
-      // Find next incomplete team
-      const remainingIncomplete = teams.filter(t => t.teamId !== currentTeam.teamId && !roundEvaluatedTeamIds.has(t.teamId));
-      if (remainingIncomplete.length > 0) {
-        setSelectedTeamId(remainingIncomplete[0].teamId);
-      }
+      setNotice({
+        type: 'success',
+        message: `Marks entered successfully for Team ${currentTeam.teamId}! Evaluation locked at ${finalTeamScore}/100.`
+      });
+    }
+  };
+
+  // Reset Review Handler
+  const handleConfirmResetReview = () => {
+    if (!teamToReset || !currentUser) return;
+
+    setResetting(true);
+    const targetTeamId = teamToReset.teamId;
+    const res = eventStore.resetReviewMark(
+      currentUser.uid,
+      currentUser.name,
+      currentUser.role as any,
+      activeRound,
+      targetTeamId
+    );
+
+    setResetting(false);
+    setTeamToReset(null);
+
+    if (!res.success) {
+      setNotice({ type: 'error', message: res.error || `Failed to reset review for ${targetTeamId}.` });
+    } else {
+      setSelectedTeamId(targetTeamId);
+      setSubmissionSuccessData(null);
+      setFilterTab('incomplete');
+      setNotice({
+        type: 'success',
+        message: `Round ${activeRound} review reset for Team ${targetTeamId}. Team is now in Pending queue and ready for review.`
+      });
     }
   };
 
@@ -471,11 +522,10 @@ export const ReviewerPortal: React.FC = () => {
                 const isEvaluated = roundEvaluatedTeamIds.has(t.teamId);
 
                 return (
-                  <button
+                  <div
                     key={t.teamId}
-                    type="button"
-                    onClick={() => setSelectedTeamId(t.teamId)}
-                    className={`w-full p-3 rounded-xl text-left transition-all flex items-center justify-between ${
+                    onClick={() => handleSelectTeam(t.teamId)}
+                    className={`w-full p-3 rounded-xl text-left transition-all flex items-center justify-between cursor-pointer ${
                       isSelected
                         ? 'bg-red-950/70 border border-red-800/80 shadow-glow-subtle'
                         : 'bg-[#11111e] hover:bg-[#18182a] border border-zinc-800/80'
@@ -491,16 +541,32 @@ export const ReviewerPortal: React.FC = () => {
                       </div>
                     </div>
 
-                    {isEvaluated ? (
-                      <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono font-bold border border-emerald-900/60">
-                        ✓ COMPLETED
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 text-[10px] font-mono font-bold border border-amber-900/40">
-                        PENDING
-                      </span>
-                    )}
-                  </button>
+                    <div className="flex items-center space-x-1.5">
+                      {isEvaluated ? (
+                        <>
+                          <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono font-bold border border-emerald-900/60">
+                            ✓ DONE
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTeamToReset(t);
+                            }}
+                            title={`Reset Round ${activeRound} review for ${t.teamId}`}
+                            className="px-2 py-0.5 rounded bg-[#1e1e30] hover:bg-rose-950 text-zinc-400 hover:text-rose-300 text-[10px] font-mono border border-zinc-700 hover:border-rose-800 transition-colors flex items-center space-x-1"
+                          >
+                            <RotateCcw className="w-2.5 h-2.5" />
+                            <span>Reset</span>
+                          </button>
+                        </>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 text-[10px] font-mono font-bold border border-amber-900/40">
+                          PENDING
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 );
               })
             )}
@@ -510,6 +576,68 @@ export const ReviewerPortal: React.FC = () => {
         {/* Right Column: Active Team Scoring Sheet */}
         <div className="lg:col-span-2 space-y-6">
           
+          {/* Post-Submission Success Card (if just submitted this team) */}
+          {submissionSuccessData && submissionSuccessData.teamId === currentTeam?.teamId && (
+            <div className="p-6 md:p-8 rounded-3xl bg-gradient-to-b from-emerald-950/90 via-[#0c1815] to-[#0c0c16] border-2 border-emerald-500/60 shadow-2xl space-y-6 text-center animate-in fade-in slide-in-from-bottom-3">
+              <div className="w-16 h-16 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center mx-auto text-emerald-400 shadow-lg shadow-emerald-500/20">
+                <CheckCircle2 className="w-10 h-10" />
+              </div>
+
+              <div className="space-y-1.5">
+                <span className="px-3 py-1 rounded-full bg-emerald-900/80 text-emerald-300 text-xs font-mono font-bold border border-emerald-700">
+                  ROUND 0{activeRound} EVALUATION COMPLETE
+                </span>
+                <h3 className="text-2xl sm:text-3xl font-black text-white font-display pt-1">
+                  Marks Entered Successfully!
+                </h3>
+                <p className="text-sm font-mono text-zinc-300">
+                  Evaluation locked for Team <span className="text-emerald-400 font-black font-mono text-lg">{submissionSuccessData.teamId}</span> ({submissionSuccessData.teamName})
+                </p>
+              </div>
+
+              <div className="inline-flex items-center space-x-3 bg-[#0a1410] border border-emerald-600/40 rounded-2xl px-6 py-3">
+                <span className="text-xs font-mono uppercase text-zinc-400">Total Marks Awarded:</span>
+                <span className="text-3xl font-black font-mono text-amber-400">{submissionSuccessData.score} <span className="text-sm text-zinc-500">/ 100</span></span>
+              </div>
+
+              {/* Next Step Actions */}
+              <div className="pt-4 border-t border-emerald-900/60 flex flex-col sm:flex-row items-center justify-center gap-3">
+                {submissionSuccessData.nextPendingTeamId ? (
+                  <button
+                    type="button"
+                    onClick={() => handleTakeReviewForNextTeam(submissionSuccessData.nextPendingTeamId!)}
+                    className="w-full sm:w-auto px-8 py-4 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm uppercase tracking-wider shadow-lg shadow-emerald-900/50 flex items-center justify-center space-x-3 transition-all cursor-pointer transform hover:-translate-y-0.5"
+                  >
+                    <span>Take Review for Next Team ({submissionSuccessData.nextPendingTeamId})</span>
+                    <ArrowRight className="w-5 h-5" />
+                  </button>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="text-xs font-mono text-emerald-300 font-bold">🎉 All teams have been evaluated in this round!</div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterTab('completed');
+                        setSubmissionSuccessData(null);
+                      }}
+                      className="px-6 py-2.5 rounded-xl bg-emerald-900 hover:bg-emerald-800 text-white text-xs font-mono font-bold transition-colors cursor-pointer"
+                    >
+                      View All Completed Teams
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setSubmissionSuccessData(null)}
+                  className="w-full sm:w-auto px-5 py-4 rounded-2xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Stay on {submissionSuccessData.teamId}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Team & Assigned Problem Summary */}
           {currentTeam && (
             <div className="p-6 rounded-3xl bg-[#0c0c16] border border-zinc-800 space-y-4 shadow-xl">
@@ -527,10 +655,21 @@ export const ReviewerPortal: React.FC = () => {
                 </div>
 
                 {existingMarks && (
-                  <span className="px-3 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 text-xs font-mono font-bold flex items-center space-x-1.5 self-start sm:self-auto">
-                    <Lock className="w-3.5 h-3.5" />
-                    <span>LOCKED: {existingMarks.rawScore} / 100</span>
-                  </span>
+                  <div className="flex items-center space-x-2 flex-wrap gap-y-2 self-start sm:self-auto">
+                    <span className="px-3 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 text-xs font-mono font-bold flex items-center space-x-1.5">
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>LOCKED: {existingMarks.rawScore} / 100</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTeamToReset(currentTeam)}
+                      className="px-3 py-1 rounded-full bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition-colors cursor-pointer shadow-sm"
+                      title="Reset this team's review to take marks again"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>Reset Round Review</span>
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -574,7 +713,7 @@ export const ReviewerPortal: React.FC = () => {
 
           {/* Rubric Evaluation Form */}
           {currentTeam && (
-            <form onSubmit={handleSubmitScore} className="p-6 md:p-8 rounded-3xl bg-[#0c0c16] border border-red-900/40 space-y-6 shadow-2xl">
+            <form onSubmit={handleInitiateSubmit} className="p-6 md:p-8 rounded-3xl bg-[#0c0c16] border border-red-900/40 space-y-6 shadow-2xl">
               
               {/* Header of Marking Matrix */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-800 pb-4 gap-4">
@@ -597,7 +736,7 @@ export const ReviewerPortal: React.FC = () => {
                 </div>
               </div>
 
-              {/* DIRECT TEAM MARKS ENTRY SECTION (NO TEDIOUS RUBRIC SLIDERS) */}
+              {/* DIRECT TEAM MARKS ENTRY SECTION */}
               <div className="p-5 rounded-2xl bg-[#10101c] border border-zinc-800/90 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
                   <div>
@@ -606,7 +745,7 @@ export const ReviewerPortal: React.FC = () => {
                       <span>{activeRound === 2 ? 'Step 1: Enter Team Marks (0–100)' : 'Enter Team Marks (0–100)'}</span>
                     </div>
                     <div className="text-[11px] text-zinc-400 mt-0.5">
-                      Direct text/number entry — no need to adjust multiple rubrics. Auto-syncs to teammates below.
+                      Direct text/number entry — auto-syncs to teammates below.
                     </div>
                   </div>
 
@@ -614,7 +753,7 @@ export const ReviewerPortal: React.FC = () => {
                     <button
                       type="button"
                       onClick={handleSyncAllMembersToTeamScore}
-                      className="px-3 py-1.5 rounded-xl bg-sky-950 hover:bg-sky-900 text-sky-300 border border-sky-800 text-[11px] font-mono font-bold flex items-center space-x-1.5 transition-colors self-start sm:self-auto"
+                      className="px-3 py-1.5 rounded-xl bg-sky-950 hover:bg-sky-900 text-sky-300 border border-sky-800 text-[11px] font-mono font-bold flex items-center space-x-1.5 transition-colors self-start sm:self-auto cursor-pointer"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>Sync All Teammates to {currentEffectiveTeamScore}</span>
@@ -648,14 +787,14 @@ export const ReviewerPortal: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => handleDirectTeamScoreChange(currentEffectiveTeamScore - 5)}
-                          className="px-2.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-bold transition-colors"
+                          className="px-2.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-bold transition-colors cursor-pointer"
                         >
                           -5
                         </button>
                         <button
                           type="button"
                           onClick={() => handleDirectTeamScoreChange(currentEffectiveTeamScore + 5)}
-                          className="px-2.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-bold transition-colors"
+                          className="px-2.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-bold transition-colors cursor-pointer"
                         >
                           +5
                         </button>
@@ -672,7 +811,7 @@ export const ReviewerPortal: React.FC = () => {
                           key={preset}
                           type="button"
                           onClick={() => handleDirectTeamScoreChange(preset)}
-                          className={`px-2.5 py-1.5 rounded-xl font-mono text-xs font-bold transition-all ${
+                          className={`px-2.5 py-1.5 rounded-xl font-mono text-xs font-bold transition-all cursor-pointer ${
                             currentEffectiveTeamScore === preset
                               ? 'bg-amber-500 text-black shadow-md'
                               : 'bg-[#18182a] hover:bg-zinc-700 text-zinc-300 border border-zinc-700/80'
@@ -687,7 +826,7 @@ export const ReviewerPortal: React.FC = () => {
                 </div>
               </div>
 
-              {/* ROUND 2 INDIVIDUAL TEAMMATE MARKS SECTION (DIRECT TEXT/NUMBER INPUT FOR EACH INDIVIDUAL) */}
+              {/* ROUND 2 INDIVIDUAL TEAMMATE MARKS SECTION */}
               {activeRound === 2 && (
                 <div className="space-y-4 pt-2">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
@@ -775,28 +914,28 @@ export const ReviewerPortal: React.FC = () => {
                                   <button
                                     type="button"
                                     onClick={() => handleIndividualMemberScoreChange(member.memberId, memberScore - 5)}
-                                    className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold"
+                                    className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold cursor-pointer"
                                   >
                                     -5
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => handleIndividualMemberScoreChange(member.memberId, memberScore - 1)}
-                                    className="px-1.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold"
+                                    className="px-1.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold cursor-pointer"
                                   >
                                     -1
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => handleIndividualMemberScoreChange(member.memberId, memberScore + 1)}
-                                    className="px-1.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold"
+                                    className="px-1.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold cursor-pointer"
                                   >
                                     +1
                                   </button>
                                   <button
                                     type="button"
                                     onClick={() => handleIndividualMemberScoreChange(member.memberId, memberScore + 5)}
-                                    className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold"
+                                    className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold cursor-pointer"
                                   >
                                     +5
                                   </button>
@@ -805,7 +944,7 @@ export const ReviewerPortal: React.FC = () => {
                                       type="button"
                                       onClick={() => handleIndividualMemberScoreChange(member.memberId, currentEffectiveTeamScore)}
                                       title="Reset to team score"
-                                      className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sky-400 text-[10px] font-mono font-bold"
+                                      className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sky-400 text-[10px] font-mono font-bold cursor-pointer"
                                     >
                                       Reset
                                     </button>
@@ -860,10 +999,20 @@ export const ReviewerPortal: React.FC = () => {
                 </div>
 
                 {existingMarks ? (
-                  <span className="px-5 py-2.5 rounded-xl bg-emerald-950 border border-emerald-800 text-emerald-300 text-xs font-mono font-bold self-start sm:self-auto flex items-center space-x-1.5">
-                    <Check className="w-4 h-4" />
-                    <span>✓ SUBMITTED & LOCKED</span>
-                  </span>
+                  <div className="flex items-center space-x-3 self-start sm:self-auto">
+                    <span className="px-4 py-2.5 rounded-xl bg-emerald-950 border border-emerald-800 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5">
+                      <Check className="w-4 h-4" />
+                      <span>✓ SUBMITTED & LOCKED</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setTeamToReset(currentTeam)}
+                      className="px-4 py-2.5 rounded-xl bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Reset Round Review</span>
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="submit"
@@ -872,7 +1021,7 @@ export const ReviewerPortal: React.FC = () => {
                   >
                     <span>
                       {submitting 
-                        ? 'Locking Score...' 
+                        ? 'Validating Score...' 
                         : activeRound === 2 
                           ? `Submit & Lock Team (${currentEffectiveTeamScore}/100) & ${currentTeam.members.length} Members` 
                           : `Submit & Lock ${currentEffectiveTeamScore}/100 Marks`}
@@ -887,6 +1036,150 @@ export const ReviewerPortal: React.FC = () => {
         </div>
 
       </div>
+
+      {/* CONFIRMATION MODAL BEFORE SUBMITTING MARKS (WITH PROMINENT TEAM ID) */}
+      {showConfirmSubmitModal && currentTeam && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-[#0e0e1a] border-2 border-red-600/70 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-5 animate-in fade-in zoom-in-95">
+            
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center space-x-2 text-red-400 font-bold text-sm font-mono">
+                <ShieldAlert className="w-5 h-5 text-red-500" />
+                <span>CONFIRM MARKS SUBMISSION</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowConfirmSubmitModal(false)}
+                className="text-zinc-400 hover:text-white text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Huge Team ID Banner */}
+            <div className="text-center py-5 px-6 bg-[#131322] rounded-2xl border-2 border-red-900/60 shadow-inner space-y-1">
+              <div className="text-[11px] font-mono text-red-400 uppercase tracking-widest font-bold">
+                EVALUATION MARKS FOR TEAM
+              </div>
+              <div className="text-4xl sm:text-5xl font-black font-mono text-red-400 tracking-widest drop-shadow-md py-1">
+                {currentTeam.teamId}
+              </div>
+              <div className="text-base font-bold text-white">{currentTeam.teamName}</div>
+              <div className="text-xs font-mono text-zinc-400 mt-1">Round 0{activeRound} Evaluation Station</div>
+            </div>
+
+            {/* Score Summary */}
+            <div className="p-4 rounded-xl bg-[#16162a] border border-zinc-800 space-y-2">
+              <div className="flex justify-between items-center">
+                <span className="text-xs font-mono text-zinc-300">Total Team Score:</span>
+                <span className="text-2xl font-black font-mono text-amber-400">{currentEffectiveTeamScore} / 100</span>
+              </div>
+
+              {activeRound === 2 && currentTeam.members && (
+                <div className="pt-2 border-t border-zinc-800/80 space-y-1 max-h-36 overflow-y-auto pr-1">
+                  <div className="text-[10px] font-mono text-zinc-400 uppercase font-bold">Teammate Marks Breakdown:</div>
+                  {currentTeam.members.map(m => (
+                    <div key={m.memberId} className="flex justify-between text-xs font-mono text-zinc-300">
+                      <span className="truncate max-w-[200px]">{m.name} {m.isTeamLead ? '(Lead)' : ''}:</span>
+                      <span className="text-amber-400 font-bold">{memberScores[m.memberId] ?? currentEffectiveTeamScore} / 100</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <p className="text-[11px] text-zinc-400 font-mono leading-relaxed">
+              ⚠️ Are you sure you want to submit marks for <strong className="text-white">{currentTeam.teamId}</strong>? Marks will be locked. You can reset and re-take review anytime if needed.
+            </p>
+
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => setShowConfirmSubmitModal(false)}
+                className="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-xs font-bold transition-colors cursor-pointer"
+              >
+                Cancel / Edit
+              </button>
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={handleConfirmSubmitScore}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-red-600 via-rose-600 to-red-700 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs uppercase font-mono tracking-wider shadow-glow-crimson transition-all flex items-center space-x-2 cursor-pointer"
+              >
+                <span>{submitting ? 'Locking Marks...' : `Yes, Submit Marks to ${currentTeam.teamId}`}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* CONFIRMATION MODAL FOR RESETTING TEAM REVIEW */}
+      {teamToReset && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="bg-[#0e0e1a] border-2 border-amber-600/70 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-2xl space-y-5 animate-in fade-in zoom-in-95">
+            
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center space-x-2 text-amber-400 font-bold text-sm font-mono">
+                <RotateCcw className="w-4 h-4" />
+                <span>RESET ROUND REVIEW</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTeamToReset(null)}
+                className="text-zinc-400 hover:text-white text-sm"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Huge Team ID Banner */}
+            <div className="text-center py-5 px-6 bg-[#131322] rounded-2xl border-2 border-amber-900/60 shadow-inner space-y-1">
+              <div className="text-[11px] font-mono text-amber-400 uppercase tracking-widest font-bold">
+                RESETTING EVALUATION FOR TEAM
+              </div>
+              <div className="text-4xl sm:text-5xl font-black font-mono text-amber-400 tracking-widest drop-shadow-md py-1">
+                {teamToReset.teamId}
+              </div>
+              <div className="text-base font-bold text-white">{teamToReset.teamName}</div>
+              <div className="text-xs font-mono text-zinc-400">Round 0{activeRound}</div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-800/60 text-xs text-amber-200 leading-relaxed space-y-1">
+              <div className="font-bold flex items-center space-x-1">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Return Team to Pending Status</span>
+              </div>
+              <p>
+                This will clear the submitted evaluation marks for Round {activeRound} and move Team <strong>{teamToReset.teamId}</strong> back to the <strong>Pending</strong> queue so you can take their review again.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                disabled={resetting}
+                onClick={() => setTeamToReset(null)}
+                className="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-xs font-bold transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={resetting}
+                onClick={handleConfirmResetReview}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-black font-bold text-xs uppercase font-mono tracking-wider shadow-lg transition-all flex items-center space-x-2 cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>{resetting ? 'Resetting...' : `Yes, Reset ${teamToReset.teamId} to Pending`}</span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

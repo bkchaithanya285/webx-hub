@@ -84,6 +84,10 @@ export const backendApi = {
       }
     },
 
+    async resetReviewMark(actorUid: string, actorName: string, actorRole: 'reviewer' | 'admin', round: number, teamId: string, targetReviewerUid?: string) {
+      return eventStore.resetReviewMark(actorUid, actorName, actorRole, round, teamId, targetReviewerUid);
+    },
+
     async openRound(round: 1 | 2 | 3, adminUid = 'admin', adminEmail = 'admin@klu.ac.in') {
       eventStore.openReviewRound(adminUid, adminEmail, round);
     },
