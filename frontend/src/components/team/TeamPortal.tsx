@@ -482,26 +482,32 @@ export const TeamPortal: React.FC<TeamPortalProps> = ({ onOpenPSDrawer }) => {
     setConfirmingPS(ps);
   };
 
-  const handleCommitSelectPS = (psId: string) => {
+  const handleCommitSelectPS = async (psId: string) => {
     setErrorNotice(null);
     setSuccessNotice(null);
     setSelectingPSId(psId);
 
-    const res = eventStore.selectProblemStatement(team.teamId, psId, currentUser.uid);
-    setSelectingPSId(null);
-    setConfirmingPS(null);
+    try {
+      const res = await eventStore.selectProblemStatement(team.teamId, psId, currentUser.uid);
+      setSelectingPSId(null);
+      setConfirmingPS(null);
 
-    if (!res.success) {
-      setErrorNotice(res.error || "Failed to select problem statement.");
-    } else {
-      setSuccessNotice(`Successfully selected problem statement ${psId}! Allocation locked.`);
-      try {
-        confetti({
-          particleCount: 120,
-          spread: 80,
-          origin: { y: 0.6 }
-        });
-      } catch (e) {}
+      if (!res.success) {
+        setErrorNotice(res.error || "Failed to select problem statement.");
+      } else {
+        setSuccessNotice(`Successfully selected problem statement ${psId}! Allocation locked.`);
+        try {
+          confetti({
+            particleCount: 120,
+            spread: 80,
+            origin: { y: 0.6 }
+          });
+        } catch (e) {}
+      }
+    } catch (err: any) {
+      setSelectingPSId(null);
+      setConfirmingPS(null);
+      setErrorNotice(err?.message || "Failed to select problem statement.");
     }
   };
 

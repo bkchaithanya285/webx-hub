@@ -385,10 +385,11 @@ class EventStore {
   }
 
   // DATA CONSISTENCY REPAIR ROUTINE:
-  // Guarantees zero discrepancy between teams table, problemSelections, and allocations
+  // Guarantees zero discrepancy between teams table, problemSelections, and allocations, and strictly enforces max 2 teams capacity limit
   public repairDataConsistency() {
     let changed = false;
 
+    // 1. Sync teams with problemSelections
     this.teams.forEach((t, idx) => {
       const cleanTeamId = t.teamId.toUpperCase();
       const existingSel = this.problemSelections[cleanTeamId] || this.problemSelections[t.teamId];
@@ -411,6 +412,42 @@ class EventStore {
           };
           changed = true;
         }
+      }
+    });
+
+    // 2. Strict Capacity Limit Invariant (Max 2 teams per problem statement)
+    const psGroups: Record<string, Team[]> = {};
+    this.teams.forEach(t => {
+      if (t.problemStatementId) {
+        if (!psGroups[t.problemStatementId]) psGroups[t.problemStatementId] = [];
+        psGroups[t.problemStatementId].push(t);
+      }
+    });
+
+    Object.entries(psGroups).forEach(([psId, allocatedTeams]) => {
+      if (allocatedTeams.length > 2) {
+        // Sort by problemSelectedAt (earliest first). Earliest 2 keep slot, excess are freed
+        allocatedTeams.sort((a, b) => {
+          const timeA = a.problemSelectedAt ? new Date(a.problemSelectedAt).getTime() : 0;
+          const timeB = b.problemSelectedAt ? new Date(b.problemSelectedAt).getTime() : 0;
+          return timeA - timeB;
+        });
+
+        const excessTeams = allocatedTeams.slice(2);
+        excessTeams.forEach(excessTeam => {
+          const tIdx = this.teams.findIndex(t => t.teamId === excessTeam.teamId);
+          if (tIdx !== -1) {
+            this.teams[tIdx] = {
+              ...this.teams[tIdx],
+              problemStatementId: null,
+              problemSelectedAt: null
+            };
+            const cId = excessTeam.teamId.toUpperCase();
+            delete this.problemSelections[cId];
+            delete this.problemSelections[excessTeam.teamId];
+            changed = true;
+          }
+        });
       }
     });
 
@@ -779,12 +816,12 @@ class EventStore {
     return allocations;
   }
 
-  // ATOMIC PROBLEM STATEMENT SELECTION (12-Step Validation & Atomic Transaction)
-  public selectProblemStatement(
+  // ATOMIC PROBLEM STATEMENT SELECTION (12-Step Validation & Server Transaction)
+  public async selectProblemStatement(
     teamId: string,
     problemStatementId: string,
     actorUid: string
-  ): { success: boolean; error?: string } {
+  ): Promise<{ success: boolean; error?: string }> {
     const now = Date.now();
     const settings = this.getSelectionSettings(); // Evaluates auto-unlock if lockUntil passed
     const { releaseState, selectionState } = settings;
@@ -835,8 +872,8 @@ class EventStore {
       return { success: false, error: "This Problem Statement is currently inactive or archived." };
     }
 
-    const currentAllocatedTeams = this.teams.filter(t => t.problemStatementId === problemStatementId);
-    const maxTeams = ps.maximumTeams || 2;
+    const currentAllocatedTeams = this.teams.filter(t => t.problemStatementId === problemStatementId && t.teamId !== cleanTeamId);
+    const maxTeams = 2; // Hardcoded strictly to 2 teams max
     if (currentAllocatedTeams.length >= maxTeams) {
       return {
         success: false,
@@ -844,8 +881,39 @@ class EventStore {
       };
     }
 
-    // 8. Commit atomic dual-record selection
+    // 8. Authoritative Server Transaction Call
     const selectedAt = new Date().toISOString();
+    if (typeof window !== 'undefined') {
+      try {
+        const response = await fetch(`${BACKEND_URL}/api/selectProblemStatement`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ teamId: cleanTeamId, problemStatementId, actorUid })
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.success === false || data.error) {
+          const errMsg = data.error || `Problem Statement is already full. Maximum ${maxTeams} teams reached.`;
+          // Trigger sync to get latest remote state
+          try {
+            const syncRes = await fetch(`${BACKEND_URL}/api/syncState`);
+            if (syncRes.ok) {
+              const syncData = await syncRes.json();
+              if (syncData.problemSelections) {
+                this.problemSelections = syncData.problemSelections;
+                this.repairDataConsistency();
+                this.notify();
+              }
+            }
+          } catch (e) {}
+          return { success: false, error: errMsg };
+        }
+      } catch (networkErr: any) {
+        console.warn("[Store Selection Network Warning]:", networkErr);
+      }
+    }
+
+    // 9. Commit atomic dual-record selection locally
     this.teams[teamIndex] = {
       ...team,
       problemStatementId,
@@ -865,7 +933,7 @@ class EventStore {
 
     this.rebuildLeaderboardInternal();
 
-    // 9. Audit Trail
+    // 10. Audit Trail
     this.addAuditLog(
       actorUid,
       `${teamId} Lead`,
@@ -883,17 +951,7 @@ class EventStore {
     );
 
     this.save();
-
-    // Local cross-browser backend sync
-    if (typeof window !== 'undefined') {
-      try {
-        fetch(`${BACKEND_URL}/api/selectProblemStatement`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ teamId: cleanTeamId, problemStatementId, actorUid })
-        }).catch(() => {});
-      } catch (e) {}
-    }
+    this.notify();
 
     // Authoritative Firestore Persistence
     if (typeof window !== 'undefined' && db) {

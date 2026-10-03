@@ -101,7 +101,7 @@ export const backendApi = {
         const res = await callable({ teamId, problemStatementId });
         return res.data;
       } catch (err) {
-        return eventStore.selectProblemStatement(teamId, problemStatementId, actorUid);
+        return await eventStore.selectProblemStatement(teamId, problemStatementId, actorUid);
       }
     }
   }

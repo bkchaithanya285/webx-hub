@@ -39,9 +39,11 @@ export const ProblemSelectionConfirmModal: React.FC<ProblemSelectionConfirmModal
   if (!isOpen || !problem) return null;
 
   const remainingSlots = Math.max(0, maxSlotCount - currentSlotCount);
+  const isFull = remainingSlots <= 0;
 
   const handleFinalConfirm = () => {
-    if (!agreedToLock && !isLoading) {
+    if (isFull || isLoading) return;
+    if (!agreedToLock) {
       setAgreedToLock(true);
       return;
     }
@@ -173,14 +175,21 @@ export const ProblemSelectionConfirmModal: React.FC<ProblemSelectionConfirmModal
           <button
             type="button"
             onClick={handleFinalConfirm}
-            disabled={!agreedToLock || isLoading}
+            disabled={!agreedToLock || isLoading || isFull}
             className={`w-full sm:w-auto px-8 py-3.5 rounded-2xl font-bold text-xs uppercase tracking-wider flex items-center justify-center space-x-2 transition-all shadow-xl ${
-              agreedToLock && !isLoading
+              isFull
+                ? 'bg-zinc-800 text-zinc-500 border border-zinc-700/50 cursor-not-allowed'
+                : agreedToLock && !isLoading
                 ? 'bg-gradient-to-r from-red-600 via-rose-600 to-red-600 hover:from-red-500 hover:to-rose-500 text-white shadow-red-900/50 cursor-pointer transform hover:scale-[1.02]'
                 : 'bg-zinc-800 text-zinc-500 border border-zinc-700/50 cursor-not-allowed'
             }`}
           >
-            {isLoading ? (
+            {isFull ? (
+              <>
+                <Lock className="w-4 h-4" />
+                <span>Problem Statement Full (2/2)</span>
+              </>
+            ) : isLoading ? (
               <>
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 <span>Locking Selection...</span>

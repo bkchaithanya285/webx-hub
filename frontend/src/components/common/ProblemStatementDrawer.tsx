@@ -84,7 +84,7 @@ export const ProblemStatementDrawer: React.FC<ProblemStatementDrawerProps> = ({
   const maxTeams = problem.maximumTeams || 2;
   const isFull = currentCount >= maxTeams;
 
-  const handleSelectPS = () => {
+  const handleSelectPS = async () => {
     if (!currentUser || currentUser.role !== 'team_lead' || !currentUser.teamId) {
       if (onShowLogin) onShowLogin();
       return;
@@ -99,18 +99,23 @@ export const ProblemStatementDrawer: React.FC<ProblemStatementDrawerProps> = ({
     setLoading(true);
     setError(null);
 
-    const result = eventStore.selectProblemStatement(
-      currentUser.teamId,
-      problem.problemStatementId,
-      currentUser.uid
-    );
+    try {
+      const result = await eventStore.selectProblemStatement(
+        currentUser.teamId,
+        problem.problemStatementId,
+        currentUser.uid
+      );
 
-    setLoading(false);
-    if (!result.success) {
-      setError(result.error || "Failed to select problem statement.");
-    } else {
-      setSuccess(true);
-      if (onSelectSuccess) onSelectSuccess();
+      setLoading(false);
+      if (!result.success) {
+        setError(result.error || "Failed to select problem statement.");
+      } else {
+        setSuccess(true);
+        if (onSelectSuccess) onSelectSuccess();
+      }
+    } catch (err: any) {
+      setLoading(false);
+      setError(err?.message || "Failed to select problem statement.");
     }
   };
 
