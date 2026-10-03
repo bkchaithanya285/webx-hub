@@ -916,11 +916,22 @@ const handleSelectProblem = async (req: express.Request, res: express.Response) 
         });
       });
     } catch (txErr: any) {
-      console.warn("[Backend Selection Transaction Error]:", txErr?.message);
-      return res.status(409).json({
-        success: false,
-        error: txErr.message || "Problem statement selection failed."
-      });
+      const isAuthOrCredError = txErr?.message && (
+        txErr.message.includes("default credentials") ||
+        txErr.message.includes("Could not load") ||
+        txErr.message.includes("UNAUTHENTICATED") ||
+        txErr.message.includes("offline")
+      );
+
+      if (isAuthOrCredError) {
+        console.warn("[Backend Note] Running in standalone in-memory mode without ADC cloud credentials.");
+      } else {
+        console.warn("[Backend Selection Transaction Error]:", txErr?.message);
+        return res.status(409).json({
+          success: false,
+          error: txErr.message || "Problem statement selection failed."
+        });
+      }
     }
 
     backendProblemSelections[cleanId] = {
@@ -965,21 +976,19 @@ let backendProblemSelections: Record<string, any> = {};
 let backendReviewers: any[] = [];
 let backendVolunteers: any[] = [];
 
-try {
-  db.collection("volunteers").onSnapshot((snapshot) => {
-    backendVolunteers = snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id }));
-  }, (err) => {
-    console.warn("Volunteers listener error in backend:", err?.message);
-  });
-} catch (e) {}
+if (process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.K_SERVICE || process.env.FIREBASE_CONFIG) {
+  try {
+    db.collection("volunteers").onSnapshot((snapshot) => {
+      backendVolunteers = snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id }));
+    }, () => {});
+  } catch (e) {}
 
-try {
-  db.collection("reviewers").onSnapshot((snapshot) => {
-    backendReviewers = snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id }));
-  }, (err) => {
-    console.warn("Reviewers listener error in backend:", err?.message);
-  });
-} catch (e) {}
+  try {
+    db.collection("reviewers").onSnapshot((snapshot) => {
+      backendReviewers = snapshot.docs.map(doc => ({ ...doc.data(), uid: doc.id }));
+    }, () => {});
+  } catch (e) {}
+}
 
 app.get(["/api/syncState", "/syncState", "/api/selectionSettings", "/selectionSettings"], async (req, res) => {
   try {
