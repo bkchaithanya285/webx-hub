@@ -52,7 +52,8 @@ import {
   ShieldAlert,
   Smartphone,
   Sparkles,
-  ArrowRight
+  ArrowRight,
+  RotateCcw
 } from 'lucide-react';
 import { ProblemStatementDrawer } from '../common/ProblemStatementDrawer';
 import { AttendanceControlCenter } from './AttendanceControlCenter';
@@ -597,6 +598,15 @@ export const AdminPortal: React.FC = () => {
     oldScore: number;
     newScore: number;
     reason: string;
+  } | null>(null);
+
+  const [adminResetReviewModal, setAdminResetReviewModal] = useState<{
+    isOpen: boolean;
+    round: number;
+    teamId: string;
+    teamName: string;
+    rawScore: number;
+    reviewerName?: string;
   } | null>(null);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -2032,6 +2042,23 @@ export const AdminPortal: React.FC = () => {
                                     >
                                       Correct Score
                                     </button>
+                                    <button
+                                      onClick={() => {
+                                        const team = teams.find(t => t.teamId === m.teamId);
+                                        setAdminResetReviewModal({
+                                          isOpen: true,
+                                          round: m.round,
+                                          teamId: m.teamId,
+                                          teamName: team?.teamName || m.teamId,
+                                          rawScore: m.rawScore,
+                                          reviewerName: m.reviewerName
+                                        });
+                                      }}
+                                      className="ml-1.5 px-2.5 py-1 rounded-lg bg-rose-950 hover:bg-rose-900 text-rose-300 border border-rose-800 text-[10px] uppercase font-bold transition-colors cursor-pointer"
+                                      title="Reset round review for this team to return them to Pending"
+                                    >
+                                      Reset Review
+                                    </button>
                                   </td>
                                 </tr>
                               );
@@ -2685,6 +2712,23 @@ export const AdminPortal: React.FC = () => {
                       <div className="text-[10px] font-mono text-emerald-400">
                         Norm: {norm?.normalizedScore ?? '--'}
                       </div>
+                      {marks.length > 0 && (
+                        <button
+                          onClick={() => {
+                            setAdminResetReviewModal({
+                              isOpen: true,
+                              round: rnd,
+                              teamId: selectedTeam360.teamId,
+                              teamName: selectedTeam360.teamName,
+                              rawScore: marks[0].rawScore,
+                              reviewerName: marks[0].reviewerName
+                            });
+                          }}
+                          className="mt-1 px-2 py-0.5 rounded bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-300 text-[9px] font-mono font-bold transition-colors cursor-pointer"
+                        >
+                          Reset R{rnd} Review
+                        </button>
+                      )}
                       {rnd === 2 && marks[0]?.memberScores && marks[0].memberScores.length > 0 && (
                         <div className="pt-1.5 border-t border-zinc-800/80 text-[9px] text-zinc-400 font-mono text-left space-y-0.5">
                           {marks[0].memberScores.map(ms => (
@@ -2789,6 +2833,81 @@ export const AdminPortal: React.FC = () => {
                 className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold"
               >
                 Confirm Assignment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN RESET TEAM REVIEW MODAL */}
+      {adminResetReviewModal?.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
+          <div className="relative w-full max-w-md rounded-3xl bg-[#0e0e1a] border-2 border-amber-600/70 p-6 sm:p-8 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+              <div className="flex items-center space-x-2 text-amber-400 font-bold text-sm font-mono">
+                <RotateCcw className="w-4 h-4" />
+                <span>ADMIN PRIVILEGE: RESET ROUND REVIEW</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAdminResetReviewModal(null)}
+                className="text-zinc-400 hover:text-white text-sm cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Huge Team ID Banner */}
+            <div className="text-center py-5 px-6 bg-[#131322] rounded-2xl border-2 border-amber-900/60 shadow-inner space-y-1">
+              <div className="text-[11px] font-mono text-amber-400 uppercase tracking-widest font-bold">
+                RESETTING EVALUATION FOR TEAM
+              </div>
+              <div className="text-4xl sm:text-5xl font-black font-mono text-amber-400 tracking-widest drop-shadow-md py-1">
+                {adminResetReviewModal.teamId}
+              </div>
+              <div className="text-base font-bold text-white">{adminResetReviewModal.teamName}</div>
+              <div className="text-xs font-mono text-zinc-400 mt-1">Round 0{adminResetReviewModal.round} • Score: {adminResetReviewModal.rawScore}/100</div>
+            </div>
+
+            <div className="p-4 rounded-xl bg-amber-950/40 border border-amber-800/60 text-xs text-amber-200 leading-relaxed space-y-1">
+              <div className="font-bold flex items-center space-x-1">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Return Team to Pending Status</span>
+              </div>
+              <p>
+                This will delete the submitted marks for Round {adminResetReviewModal.round} and return Team <strong>{adminResetReviewModal.teamId}</strong> back to the <strong>Pending</strong> queue so the reviewer can score them again.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setAdminResetReviewModal(null)}
+                className="px-5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-mono text-xs font-bold transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const res = eventStore.resetReviewMark(
+                    currentUser?.uid || 'admin',
+                    currentUser?.name || currentUser?.email || 'admin',
+                    'admin',
+                    adminResetReviewModal.round,
+                    adminResetReviewModal.teamId
+                  );
+                  if (res.success) {
+                    showNotification('success', `Reset Round ${adminResetReviewModal.round} review for ${adminResetReviewModal.teamId}. Team is now in Pending queue.`);
+                    setAdminResetReviewModal(null);
+                  } else {
+                    showNotification('error', res.error || 'Failed to reset review.');
+                  }
+                }}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-black font-bold text-xs uppercase font-mono tracking-wider shadow-lg transition-all flex items-center space-x-2 cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>Yes, Reset to Pending</span>
               </button>
             </div>
           </div>

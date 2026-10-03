@@ -2062,18 +2062,17 @@ class EventStore {
     return { success: true };
   }
 
-  // RESET REVIEW MARKS FOR A TEAM IN A GIVEN ROUND (RETURNS TEAM TO PENDING EVALUATION)
+  // RESET REVIEW MARKS FOR A TEAM IN A GIVEN ROUND (ADMIN ONLY - RETURNS TEAM TO PENDING EVALUATION)
   public resetReviewMark(
     actorUid: string,
     actorName: string,
-    actorRole: 'reviewer' | 'admin',
+    actorRole: string,
     round: number,
     teamId: string,
     targetReviewerUid?: string
   ): { success: boolean; error?: string } {
-    const roundKey = `round${round}Status` as 'round1Status' | 'round2Status' | 'round3Status';
-    if (this.reviewSettings[roundKey] !== 'OPEN' && actorRole !== 'admin') {
-      return { success: false, error: `Round ${round} is currently CLOSED by Administrator.` };
+    if (actorRole !== 'admin') {
+      return { success: false, error: "Unauthorized: Only Administrators are authorized to reset team evaluations." };
     }
 
     const keysToDelete: string[] = [];
