@@ -1941,7 +1941,20 @@ export const AdminPortal: React.FC = () => {
                                 <span className="text-[10px] text-zinc-400 font-sans">{t?.teamName || ''}</span>
                               </td>
                               <td className="py-2.5 text-zinc-300 font-sans">{m.reviewerName}</td>
-                              <td className="py-2.5 text-amber-400 font-bold">{m.rawScore} / 100</td>
+                              <td className="py-2.5">
+                                <div className="text-amber-400 font-bold">{m.rawScore} / 100</div>
+                                {m.memberScores && m.memberScores.length > 0 && (
+                                  <div className="text-[10px] text-zinc-400 font-sans mt-0.5 space-y-0.5">
+                                    <div className="flex flex-wrap gap-1 mt-0.5">
+                                      {m.memberScores.map(ms => (
+                                        <span key={ms.memberId} className="px-1.5 py-0.5 bg-zinc-800/90 border border-zinc-700/60 rounded text-[9px] text-zinc-300 font-mono">
+                                          {ms.name.split(' ')[0]}: <strong className="text-amber-300">{ms.score}</strong>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </td>
                               <td className="py-2.5 text-zinc-400">
                                 {norm?.reviewerMean !== undefined ? `${norm.reviewerMean.toFixed(1)}` : norm?.minimumReviewerScore !== undefined ? `${norm.minimumReviewerScore}-${norm.maximumReviewerScore}` : '—'}
                               </td>
@@ -2450,6 +2463,16 @@ export const AdminPortal: React.FC = () => {
                       <div className="text-[10px] font-mono text-emerald-400">
                         Norm: {norm?.normalizedScore ?? '--'}
                       </div>
+                      {rnd === 2 && marks[0]?.memberScores && marks[0].memberScores.length > 0 && (
+                        <div className="pt-1.5 border-t border-zinc-800/80 text-[9px] text-zinc-400 font-mono text-left space-y-0.5">
+                          {marks[0].memberScores.map(ms => (
+                            <div key={ms.memberId} className="flex justify-between items-center text-zinc-300">
+                              <span className="truncate max-w-[80px]">{ms.name.split(' ')[0]}:</span>
+                              <span className="text-amber-400 font-bold">{ms.score}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}

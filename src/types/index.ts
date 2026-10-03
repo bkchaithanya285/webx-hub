@@ -167,6 +167,16 @@ export interface ReviewMarkRubric {
   presentationImpact: number; // 0-25
 }
 
+export interface MemberReviewScore {
+  memberId: string;
+  name: string;
+  registrationNumber: string;
+  isTeamLead?: boolean;
+  score: number; // 0-100
+  rubric?: ReviewMarkRubric;
+  feedback?: string;
+}
+
 export interface ReviewMark {
   id: string; // round_team_reviewer
   round: number;
@@ -175,6 +185,7 @@ export interface ReviewMark {
   reviewerName: string;
   rawScore: number; // 0-100
   rubric?: ReviewMarkRubric;
+  memberScores?: MemberReviewScore[]; // Individual teammate marks for Round 2
   feedback?: string;
   submittedAt: string;
   status: 'draft' | 'submitted' | 'locked';

@@ -64,13 +64,13 @@ export const backendApi = {
 
   // 2. REVIEWS & AUTOMATIC NORMALIZATION BACKEND SERVICES
   reviews: {
-    async submitMarks(reviewerUid: string, reviewerName: string, round: number, teamId: string, rawScore: number, rubric?: any, feedback?: string) {
+    async submitMarks(reviewerUid: string, reviewerName: string, round: number, teamId: string, rawScore: number, rubric?: any, feedback?: string, memberScores?: any) {
       try {
         const callable = httpsCallable(functions, 'submitReviewMarks');
-        const res = await callable({ round, teamId, rawScore, rubric, feedback });
+        const res = await callable({ round, teamId, rawScore, rubric, feedback, memberScores });
         return res.data;
       } catch (err) {
-        return eventStore.submitReviewMarks(reviewerUid, reviewerName, round, teamId, rawScore, rubric, feedback);
+        return eventStore.submitReviewMarks(reviewerUid, reviewerName, round, teamId, rawScore, rubric, feedback, memberScores);
       }
     },
 

@@ -12,6 +12,7 @@ import {
   Volunteer,
   ReviewSettings,
   ReviewMark,
+  MemberReviewScore,
   NormalizedScore,
   LeaderboardEntry,
   DeviceSession,
@@ -1939,7 +1940,8 @@ class EventStore {
     teamId: string,
     rawScore: number,
     rubric?: ReviewMark['rubric'],
-    feedback?: string
+    feedback?: string,
+    memberScores?: MemberReviewScore[]
   ): { success: boolean; error?: string } {
     if (typeof rawScore !== 'number' || isNaN(rawScore) || rawScore < 0 || rawScore > 100) {
       return { success: false, error: "Marks must be a valid number between 0 and 100." };
@@ -1965,6 +1967,7 @@ class EventStore {
       reviewerName,
       rawScore,
       rubric,
+      memberScores,
       feedback,
       submittedAt: new Date().toISOString(),
       status: 'locked'
