@@ -12,6 +12,7 @@ import {
   Volunteer,
   ReviewSettings,
   ReviewMark,
+  MemberReviewScore,
   NormalizedScore,
   LeaderboardEntry,
   DeviceSession,
@@ -31,6 +32,7 @@ import {
 } from '../data/seedData';
 import { db } from './firebase';
 import { doc, setDoc, getDoc, deleteDoc, collection, onSnapshot } from 'firebase/firestore';
+import * as XLSX from 'xlsx';
 
 const BACKEND_URL = (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_BACKEND_URL) 
   ? (import.meta as any).env.VITE_BACKEND_URL.replace(/\/+$/, '') 
@@ -1945,7 +1947,8 @@ class EventStore {
     teamId: string,
     rawScore: number,
     rubric?: ReviewMark['rubric'],
-    feedback?: string
+    feedback?: string,
+    memberScores?: MemberReviewScore[]
   ): { success: boolean; error?: string } {
     if (typeof rawScore !== 'number' || isNaN(rawScore) || rawScore < 0 || rawScore > 100) {
       return { success: false, error: "Marks must be a valid number between 0 and 100." };
@@ -1971,6 +1974,7 @@ class EventStore {
       reviewerName,
       rawScore,
       rubric,
+      memberScores,
       feedback,
       submittedAt: new Date().toISOString(),
       status: 'locked'
@@ -2452,6 +2456,194 @@ class EventStore {
       e.totalScore
     ].join(','));
     return [headers.join(','), ...rows].join('\n');
+  }
+
+  // PENDING & COMPLETED REVIEW TEAM HELPERS
+  public getPendingReviewTeams(round: number): Team[] {
+    const evaluatedTeamIds = new Set(
+      Object.values(this.reviewMarks)
+        .filter(m => m.round === round && (m.status === 'locked' || m.status === 'submitted'))
+        .map(m => m.teamId)
+    );
+    return this.teams.filter(t => !evaluatedTeamIds.has(t.teamId));
+  }
+
+  public getCompletedReviewTeams(round: number): { team: Team; mark: ReviewMark; normalized?: NormalizedScore }[] {
+    const results: { team: Team; mark: ReviewMark; normalized?: NormalizedScore }[] = [];
+    this.teams.forEach(team => {
+      const mark = Object.values(this.reviewMarks).find(m => m.round === round && m.teamId === team.teamId);
+      if (mark) {
+        const normalized = Object.values(this.normalizedScores).find(n => n.round === round && n.teamId === team.teamId);
+        results.push({ team, mark, normalized });
+      }
+    });
+    return results;
+  }
+
+  // EXCEL (.XLSX) EXPORTS WITH TEAM & INDIVIDUAL MEMBER SCORES
+  public exportRoundMarksExcel(round?: number): void {
+    const targetRound = round || this.reviewSettings.activeRound || 2;
+    const filteredMarks = Object.values(this.reviewMarks).filter(m => m.round === targetRound);
+    
+    // Sheet 1: Team Marks
+    const teamMarksData = filteredMarks.map(m => {
+      const team = this.teams.find(t => t.teamId === m.teamId);
+      const norm = Object.values(this.normalizedScores).find(n => n.round === m.round && n.teamId === m.teamId && n.reviewerUid === m.reviewerUid);
+      const ps = team?.problemStatementId ? this.getProblemStatement(team.problemStatementId) : null;
+      return {
+        "Round": `Round ${m.round}`,
+        "Team ID": m.teamId,
+        "Team Name": team?.teamName || '',
+        "Problem Statement ID": team?.problemStatementId || 'Unassigned',
+        "Problem Title": ps?.title || 'N/A',
+        "Reviewer Name": m.reviewerName,
+        "Team Raw Score (/100)": m.rawScore,
+        "Normalized Score": norm?.normalizedScore ? Number(norm.normalizedScore.toFixed(2)) : 'Pending',
+        "Feedback / Remarks": m.feedback || '',
+        "Submitted At": new Date(m.submittedAt).toLocaleString(),
+        "Status": m.status.toUpperCase()
+      };
+    });
+
+    // Sheet 2: Individual Teammate Scores
+    const memberScoresData: any[] = [];
+    filteredMarks.forEach(m => {
+      const team = this.teams.find(t => t.teamId === m.teamId);
+      if (m.memberScores && Array.isArray(m.memberScores) && m.memberScores.length > 0) {
+        m.memberScores.forEach(ms => {
+          memberScoresData.push({
+            "Round": `Round ${m.round}`,
+            "Team ID": m.teamId,
+            "Team Name": team?.teamName || '',
+            "Member Name": ms.name,
+            "Registration Number": ms.registrationNumber,
+            "Role": ms.isTeamLead ? "Team Lead" : "Member",
+            "Individual Score (/100)": ms.score,
+            "Individual Remark": ms.feedback || '',
+            "Team Baseline Score": m.rawScore,
+            "Reviewer": m.reviewerName,
+            "Submitted At": new Date(m.submittedAt).toLocaleString()
+          });
+        });
+      } else if (team) {
+        team.members.forEach(mem => {
+          memberScoresData.push({
+            "Round": `Round ${m.round}`,
+            "Team ID": m.teamId,
+            "Team Name": team.teamName,
+            "Member Name": mem.name,
+            "Registration Number": mem.registrationNumber,
+            "Role": mem.isTeamLead ? "Team Lead" : "Member",
+            "Individual Score (/100)": m.rawScore,
+            "Individual Remark": m.feedback || '',
+            "Team Baseline Score": m.rawScore,
+            "Reviewer": m.reviewerName,
+            "Submitted At": new Date(m.submittedAt).toLocaleString()
+          });
+        });
+      }
+    });
+
+    // Sheet 3: Pending Review Teams
+    const pendingTeams = this.getPendingReviewTeams(targetRound);
+    const pendingData = pendingTeams.map(t => {
+      const lead = t.members.find(m => m.isTeamLead) || t.members[0];
+      const ps = t.problemStatementId ? this.getProblemStatement(t.problemStatementId) : null;
+      return {
+        "Round": `Round ${targetRound}`,
+        "Team ID": t.teamId,
+        "Team Name": t.teamName,
+        "Problem Statement ID": t.problemStatementId || 'Unassigned',
+        "Problem Title": ps?.title || 'N/A',
+        "Team Lead Name": lead?.name || '',
+        "Lead Reg No": lead?.registrationNumber || '',
+        "Lead Phone": lead?.phone || '',
+        "Lead Email": lead?.email || '',
+        "Members Count": t.members.length,
+        "Review Status": "PENDING EVALUATION"
+      };
+    });
+
+    // Build workbook
+    const wb = XLSX.utils.book_new();
+    const wsTeams = XLSX.utils.json_to_sheet(teamMarksData.length ? teamMarksData : [{ Note: `No evaluations submitted yet for Round ${targetRound}` }]);
+    const wsMembers = XLSX.utils.json_to_sheet(memberScoresData.length ? memberScoresData : [{ Note: `No individual member scores yet for Round ${targetRound}` }]);
+    const wsPending = XLSX.utils.json_to_sheet(pendingData.length ? pendingData : [{ Note: `All teams evaluated for Round ${targetRound}!` }]);
+
+    XLSX.utils.book_append_sheet(wb, wsTeams, `R${targetRound}_Team_Marks`);
+    XLSX.utils.book_append_sheet(wb, wsMembers, `R${targetRound}_Individual_Teammates`);
+    XLSX.utils.book_append_sheet(wb, wsPending, `R${targetRound}_Pending_Teams`);
+
+    XLSX.writeFile(wb, `WEBX_Round_${targetRound}_Evaluation_Marks_${Date.now()}.xlsx`);
+  }
+
+  public exportAllMarksExcel(): void {
+    const wb = XLSX.utils.book_new();
+
+    // Sheets for each round
+    [1, 2, 3].forEach(rnd => {
+      const marks = Object.values(this.reviewMarks).filter(m => m.round === rnd);
+      const data = marks.map(m => {
+        const team = this.teams.find(t => t.teamId === m.teamId);
+        const norm = Object.values(this.normalizedScores).find(n => n.round === m.round && n.teamId === m.teamId && n.reviewerUid === m.reviewerUid);
+        return {
+          "Team ID": m.teamId,
+          "Team Name": team?.teamName || '',
+          "Reviewer": m.reviewerName,
+          "Raw Score (/100)": m.rawScore,
+          "Normalized Score": norm?.normalizedScore ? Number(norm.normalizedScore.toFixed(2)) : 'Pending',
+          "Feedback": m.feedback || '',
+          "Submitted At": new Date(m.submittedAt).toLocaleString()
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ Note: `No submissions for Round ${rnd}` }]);
+      XLSX.utils.book_append_sheet(wb, ws, `Round_${rnd}_Marks`);
+    });
+
+    // Leaderboard sheet
+    const lbData = this.leaderboard.map(e => ({
+      "Rank": e.rank,
+      "Team ID": e.teamId,
+      "Team Name": e.teamName,
+      "Problem Statement": e.problemStatementId || 'NONE',
+      "R1 Raw Avg": e.round1RawAvg,
+      "R1 Norm Avg": e.round1NormalizedAvg,
+      "R2 Raw Avg": e.round2RawAvg,
+      "R2 Norm Avg": e.round2NormalizedAvg,
+      "R3 Raw Avg": e.round3RawAvg,
+      "R3 Norm Avg": e.round3NormalizedAvg,
+      "Total Final Score": e.totalScore
+    }));
+    const wsLb = XLSX.utils.json_to_sheet(lbData.length ? lbData : [{ Note: "Leaderboard not computed yet" }]);
+    XLSX.utils.book_append_sheet(wb, wsLb, "Official_Leaderboard");
+
+    // All Individual Teammate Scores (especially Round 2)
+    const allMemberRows: any[] = [];
+    Object.values(this.reviewMarks).forEach(m => {
+      const team = this.teams.find(t => t.teamId === m.teamId);
+      if (m.memberScores && Array.isArray(m.memberScores)) {
+        m.memberScores.forEach(ms => {
+          allMemberRows.push({
+            "Round": `Round ${m.round}`,
+            "Team ID": m.teamId,
+            "Team Name": team?.teamName || '',
+            "Member Name": ms.name,
+            "Registration No": ms.registrationNumber,
+            "Role": ms.isTeamLead ? "Team Lead" : "Member",
+            "Individual Score (/100)": ms.score,
+            "Remark": ms.feedback || '',
+            "Team Baseline Score": m.rawScore,
+            "Reviewer": m.reviewerName
+          });
+        });
+      }
+    });
+    if (allMemberRows.length > 0) {
+      const wsMembers = XLSX.utils.json_to_sheet(allMemberRows);
+      XLSX.utils.book_append_sheet(wb, wsMembers, "Individual_Teammates");
+    }
+
+    XLSX.writeFile(wb, `WEBX_Official_All_Evaluation_Marks_${Date.now()}.xlsx`);
   }
 
   // ============================================================

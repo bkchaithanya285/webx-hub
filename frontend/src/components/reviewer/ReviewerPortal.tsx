@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import { Team, ProblemStatement, ReviewSettings, ReviewMark } from '../../types';
+import { Team, ReviewSettings, ReviewMark, MemberReviewScore } from '../../types';
 import { eventStore } from '../../services/store';
 import {
   Award,
@@ -14,8 +14,17 @@ import {
   FileCode2,
   ArrowRight,
   ShieldCheck,
-  EyeOff
+  EyeOff,
+  User,
+  Users,
+  RefreshCw,
+  Edit3,
+  Check,
+  ListFilter,
+  CheckCircle
 } from 'lucide-react';
+
+type FilterTab = 'incomplete' | 'completed' | 'all';
 
 export const ReviewerPortal: React.FC = () => {
   const { currentUser } = useAuth();
@@ -24,21 +33,27 @@ export const ReviewerPortal: React.FC = () => {
   const [reviewMarks, setReviewMarks] = useState<ReviewMark[]>(eventStore.getReviewMarks());
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTeamId, setSelectedTeamId] = useState<string>('WEB-001');
+  const [filterTab, setFilterTab] = useState<FilterTab>('incomplete');
   
-  // Rubric Scoring State (0-100 total)
+  // Direct Team Score (0-100 direct text/number input)
+  const [directTeamScore, setDirectTeamScore] = useState<number>(80);
+
+  // Rubric Scoring State (0-100 total fallback/breakdown)
   const [innovation, setInnovation] = useState(20); // max 25
-  const [techFeasibility, setTechFeasibility] = useState(22); // max 25
-  const [uiUxArchitecture, setUiUxArchitecture] = useState(21); // max 25
-  const [presentationImpact, setPresentationImpact] = useState(22); // max 25
+  const [techFeasibility, setTechFeasibility] = useState(20); // max 25
+  const [uiUxArchitecture, setUiUxArchitecture] = useState(20); // max 25
+  const [presentationImpact, setPresentationImpact] = useState(20); // max 25
   const [feedbackNotes, setFeedbackNotes] = useState('');
+  
+  // Round 2 Individual Teammate Scores state (memberId -> score)
+  const [memberScores, setMemberScores] = useState<Record<string, number>>({});
+  const [memberFeedback, setMemberFeedback] = useState<Record<string, string>>({});
   
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const rawTotal = innovation + techFeasibility + uiUxArchitecture + presentationImpact;
-
   const activeRound = reviewSettings.activeRound || 1;
-  const currentTeam = teams.find(t => t.teamId === selectedTeamId) || teams[0];
+  const currentEffectiveTeamScore = activeRound === 2 ? directTeamScore : (innovation + techFeasibility + uiUxArchitecture + presentationImpact);
 
   useEffect(() => {
     const update = () => {
@@ -50,8 +65,19 @@ export const ReviewerPortal: React.FC = () => {
     return eventStore.subscribe(update);
   }, []);
 
-  // Evaluated team set for instant O(1) lookups
-  const evaluatedTeamIds = useMemo(() => {
+  // Evaluated team set for this round across ALL reviewers (or this reviewer)
+  const roundEvaluatedTeamIds = useMemo(() => {
+    const set = new Set<string>();
+    reviewMarks.forEach(m => {
+      if (m.round === activeRound && (m.status === 'locked' || m.status === 'submitted')) {
+        set.add(m.teamId);
+      }
+    });
+    return set;
+  }, [reviewMarks, activeRound]);
+
+  // Evaluated specifically by this logged-in reviewer
+  const myEvaluatedTeamIds = useMemo(() => {
     const set = new Set<string>();
     if (!currentUser) return set;
     reviewMarks.forEach(m => {
@@ -62,17 +88,38 @@ export const ReviewerPortal: React.FC = () => {
     return set;
   }, [reviewMarks, activeRound, currentUser?.uid]);
 
-  // Memoized team filtering for zero typing lag
+  // Filtered teams based on tab & search query
   const filteredTeams = useMemo(() => {
-    if (!searchQuery.trim()) return teams;
+    let list = teams;
+    if (filterTab === 'incomplete') {
+      list = teams.filter(t => !roundEvaluatedTeamIds.has(t.teamId));
+    } else if (filterTab === 'completed') {
+      list = teams.filter(t => roundEvaluatedTeamIds.has(t.teamId));
+    }
+
+    if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase().trim();
-    return teams.filter(t => 
+    return list.filter(t => 
       t.teamId.toLowerCase().includes(q) ||
       t.teamName.toLowerCase().includes(q)
     );
-  }, [teams, searchQuery]);
+  }, [teams, filterTab, roundEvaluatedTeamIds, searchQuery]);
 
-  // When team or round changes, load that specific round's marks if already submitted, or reset to fresh rubric
+  // Selected Team resolution
+  const currentTeam = useMemo(() => {
+    const found = teams.find(t => t.teamId === selectedTeamId);
+    if (found) return found;
+    return filteredTeams[0] || teams[0];
+  }, [teams, selectedTeamId, filteredTeams]);
+
+  // Update selected team if the active selection gets filtered out
+  useEffect(() => {
+    if (filteredTeams.length > 0 && !filteredTeams.some(t => t.teamId === selectedTeamId)) {
+      setSelectedTeamId(filteredTeams[0].teamId);
+    }
+  }, [filteredTeams, selectedTeamId]);
+
+  // Load existing marks or initialize when team or round changes
   useEffect(() => {
     if (!currentTeam || !currentUser) return;
     const existing = reviewMarks.find(
@@ -80,19 +127,96 @@ export const ReviewerPortal: React.FC = () => {
     );
 
     if (existing) {
-      setInnovation(existing.rubric?.innovation ?? 20);
-      setTechFeasibility(existing.rubric?.technicalFeasibility ?? 20);
-      setUiUxArchitecture(existing.rubric?.uiUxArchitecture ?? 20);
-      setPresentationImpact(existing.rubric?.presentationImpact ?? 20);
+      setDirectTeamScore(existing.rawScore);
+      const inn = existing.rubric?.innovation ?? Math.round(existing.rawScore * 0.25);
+      const tech = existing.rubric?.technicalFeasibility ?? Math.round(existing.rawScore * 0.25);
+      const ui = existing.rubric?.uiUxArchitecture ?? Math.round(existing.rawScore * 0.25);
+      const pres = existing.rubric?.presentationImpact ?? (existing.rawScore - inn - tech - ui);
+      setInnovation(inn);
+      setTechFeasibility(tech);
+      setUiUxArchitecture(ui);
+      setPresentationImpact(pres);
       setFeedbackNotes(existing.feedback || '');
+
+      // Load individual scores if available
+      const initialMemberScores: Record<string, number> = {};
+      const initialMemberFeedback: Record<string, string> = {};
+      if (existing.memberScores && Array.isArray(existing.memberScores)) {
+        existing.memberScores.forEach(ms => {
+          initialMemberScores[ms.memberId] = ms.score;
+          if (ms.feedback) initialMemberFeedback[ms.memberId] = ms.feedback;
+        });
+      } else {
+        currentTeam.members.forEach(m => {
+          initialMemberScores[m.memberId] = existing.rawScore;
+        });
+      }
+      setMemberScores(initialMemberScores);
+      setMemberFeedback(initialMemberFeedback);
     } else {
+      const defaultScore = 80;
+      setDirectTeamScore(defaultScore);
       setInnovation(20);
       setTechFeasibility(20);
       setUiUxArchitecture(20);
       setPresentationImpact(20);
       setFeedbackNotes('');
+
+      // Initialize all teammate scores to direct team score (80)
+      const initialMemberScores: Record<string, number> = {};
+      currentTeam.members.forEach(m => {
+        initialMemberScores[m.memberId] = defaultScore;
+      });
+      setMemberScores(initialMemberScores);
+      setMemberFeedback({});
     }
-  }, [selectedTeamId, activeRound, currentUser?.uid, reviewMarks]);
+  }, [currentTeam?.teamId, activeRound, currentUser?.uid, reviewMarks]);
+
+  // Direct team score change handler for Round 2
+  const handleDirectTeamScoreChange = (score: number) => {
+    const clamped = Math.max(0, Math.min(100, isNaN(score) ? 0 : score));
+    setDirectTeamScore(clamped);
+    
+    // Auto-update member scores
+    if (currentTeam) {
+      setMemberScores(prev => {
+        const updated = { ...prev };
+        currentTeam.members.forEach(m => {
+          updated[m.memberId] = clamped;
+        });
+        return updated;
+      });
+    }
+  };
+
+  // Sync all members to current team baseline score
+  const handleSyncAllMembersToTeamScore = () => {
+    if (!currentTeam) return;
+    const score = currentEffectiveTeamScore;
+    const updated: Record<string, number> = {};
+    currentTeam.members.forEach(m => {
+      updated[m.memberId] = score;
+    });
+    setMemberScores(updated);
+    setNotice({ type: 'success', message: `All ${currentTeam.members.length} teammates synced to Team Score: ${score}/100` });
+  };
+
+  // Update specific individual member score
+  const handleIndividualMemberScoreChange = (memberId: string, score: number) => {
+    const clamped = Math.max(0, Math.min(100, isNaN(score) ? 0 : score));
+    setMemberScores(prev => ({
+      ...prev,
+      [memberId]: clamped
+    }));
+  };
+
+  // Update individual member remark
+  const handleIndividualMemberFeedbackChange = (memberId: string, text: string) => {
+    setMemberFeedback(prev => ({
+      ...prev,
+      [memberId]: text
+    }));
+  };
 
   if (!currentUser || currentUser.role !== 'reviewer') {
     return (
@@ -112,11 +236,18 @@ export const ReviewerPortal: React.FC = () => {
   const isRoundOpen = reviewSettings[roundKey] === 'OPEN';
   const problemStatement = currentTeam?.problemStatementId ? eventStore.getProblemStatement(currentTeam.problemStatementId) : null;
   
-  // Check if this reviewer already submitted marks for this round + team
+  // Check if existing marks exist for current round
   const existingMarks = currentTeam ? reviewMarks.find(
-    m => m.round === activeRound && m.teamId === currentTeam.teamId && m.reviewerUid === currentUser.uid
+    m => m.round === activeRound && m.teamId === currentTeam.teamId && (m.reviewerUid === currentUser.uid || m.status === 'locked')
   ) : undefined;
 
+  // Calculate average of individual teammate marks in Round 2
+  const memberScoresArray = currentTeam ? currentTeam.members.map(m => memberScores[m.memberId] ?? currentEffectiveTeamScore) : [];
+  const avgMemberScore = memberScoresArray.length > 0 
+    ? Math.round(memberScoresArray.reduce((acc, s) => acc + s, 0) / memberScoresArray.length) 
+    : currentEffectiveTeamScore;
+
+  // Submit Score Handler
   const handleSubmitScore = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentTeam) return;
@@ -126,22 +257,47 @@ export const ReviewerPortal: React.FC = () => {
       return;
     }
 
+    const finalTeamScore = currentEffectiveTeamScore;
+    if (finalTeamScore < 0 || finalTeamScore > 100 || isNaN(finalTeamScore)) {
+      setNotice({ type: 'error', message: "Please enter a valid team score between 0 and 100." });
+      return;
+    }
+
     setSubmitting(true);
     setNotice(null);
+
+    // Build member scores array if Round 2
+    let payloadMemberScores: MemberReviewScore[] | undefined = undefined;
+    if (activeRound === 2) {
+      payloadMemberScores = currentTeam.members.map(m => ({
+        memberId: m.memberId,
+        name: m.name,
+        registrationNumber: m.registrationNumber,
+        isTeamLead: m.isTeamLead,
+        score: memberScores[m.memberId] !== undefined ? memberScores[m.memberId] : finalTeamScore,
+        feedback: memberFeedback[m.memberId] || ''
+      }));
+    }
+
+    // Rubric distribution
+    const quarter = Math.round(finalTeamScore / 4);
+    const remainder = finalTeamScore - (quarter * 3);
+    const rubricPayload = {
+      innovation: quarter,
+      technicalFeasibility: quarter,
+      uiUxArchitecture: quarter,
+      presentationImpact: remainder
+    };
 
     const res = eventStore.submitReviewMarks(
       currentUser.uid,
       currentUser.name,
       activeRound,
       currentTeam.teamId,
-      rawTotal,
-      {
-        innovation,
-        technicalFeasibility: techFeasibility,
-        uiUxArchitecture,
-        presentationImpact
-      },
-      feedbackNotes
+      finalTeamScore,
+      rubricPayload,
+      feedbackNotes,
+      payloadMemberScores
     );
 
     setSubmitting(false);
@@ -149,9 +305,21 @@ export const ReviewerPortal: React.FC = () => {
     if (!res.success) {
       setNotice({ type: 'error', message: res.error || "Failed to submit marks." });
     } else {
-      setNotice({ type: 'success', message: `Evaluation locked for ${currentTeam.teamId}! Total Score: ${rawTotal}/100` });
+      setNotice({
+        type: 'success',
+        message: `Evaluation submitted & locked for ${currentTeam.teamId}! Team score: ${finalTeamScore}/100. Team moved to Completed.`
+      });
+
+      // Find next incomplete team
+      const remainingIncomplete = teams.filter(t => t.teamId !== currentTeam.teamId && !roundEvaluatedTeamIds.has(t.teamId));
+      if (remainingIncomplete.length > 0) {
+        setSelectedTeamId(remainingIncomplete[0].teamId);
+      }
     }
   };
+
+  const incompleteCount = teams.filter(t => !roundEvaluatedTeamIds.has(t.teamId)).length;
+  const completedCount = teams.filter(t => roundEvaluatedTeamIds.has(t.teamId)).length;
 
   return (
     <div className="min-h-screen bg-[#07070d] text-[#f1f1f5] p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
@@ -202,63 +370,140 @@ export const ReviewerPortal: React.FC = () => {
             {notice.type === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <AlertTriangle className="w-4 h-4 text-red-400" />}
             <span>{notice.message}</span>
           </div>
-          <button onClick={() => setNotice(null)}>✕</button>
+          <button onClick={() => setNotice(null)} className="hover:text-white font-bold ml-4">✕</button>
         </div>
       )}
 
       {/* Main Scoring Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         
-        {/* Left Column: Team Selector List */}
+        {/* Left Column: Team Selector List & Filters */}
         <div className="lg:col-span-1 rounded-3xl bg-[#0c0c16] border border-zinc-800 p-5 space-y-4">
-          <div className="text-xs font-mono uppercase tracking-wider text-zinc-400 font-bold">
-            SELECT TEAM TO EVALUATE
+          
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-mono uppercase tracking-wider text-zinc-400 font-bold flex items-center space-x-1.5">
+              <ListFilter className="w-3.5 h-3.5 text-sky-400" />
+              <span>TEAMS EVALUATION QUEUE</span>
+            </div>
+            <span className="text-[10px] font-mono text-zinc-500">Round {activeRound}</span>
           </div>
 
+          {/* Filter Tabs: Incomplete (Default) | Completed | All */}
+          <div className="grid grid-cols-3 gap-1 p-1 bg-[#121220] rounded-xl border border-zinc-800 text-[11px] font-mono">
+            <button
+              type="button"
+              onClick={() => setFilterTab('incomplete')}
+              className={`py-1.5 px-2 rounded-lg text-center transition-all flex flex-col items-center justify-center ${
+                filterTab === 'incomplete'
+                  ? 'bg-red-600 text-white font-bold shadow-md'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <span>Pending</span>
+              <span className="text-[9px] opacity-80">({incompleteCount})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setFilterTab('completed')}
+              className={`py-1.5 px-2 rounded-lg text-center transition-all flex flex-col items-center justify-center ${
+                filterTab === 'completed'
+                  ? 'bg-emerald-600 text-white font-bold shadow-md'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <span>Done</span>
+              <span className="text-[9px] opacity-80">({completedCount})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setFilterTab('all')}
+              className={`py-1.5 px-2 rounded-lg text-center transition-all flex flex-col items-center justify-center ${
+                filterTab === 'all'
+                  ? 'bg-zinc-700 text-white font-bold shadow-md'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              <span>All</span>
+              <span className="text-[9px] opacity-80">({teams.length})</span>
+            </button>
+          </div>
+
+          {/* Search Box */}
           <div className="relative">
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search Team ID or name..."
-              className="w-full px-3.5 py-2 pl-9 rounded-xl bg-[#121220] border border-zinc-700 text-xs text-white placeholder-zinc-500 outline-none"
+              className="w-full px-3.5 py-2 pl-9 rounded-xl bg-[#121220] border border-zinc-700 text-xs text-white placeholder-zinc-500 outline-none focus:border-red-500 transition-colors"
             />
             <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-3" />
           </div>
 
+          {/* List of Teams */}
           <div className="space-y-1.5 max-h-[500px] overflow-y-auto pr-1">
-            {filteredTeams.map(t => {
-              const isSelected = t.teamId === selectedTeamId;
-              const hasMarks = evaluatedTeamIds.has(t.teamId);
+            {filteredTeams.length === 0 ? (
+              <div className="p-6 rounded-2xl bg-[#121220] border border-zinc-800 text-center space-y-3">
+                {filterTab === 'incomplete' ? (
+                  <>
+                    <CheckCircle className="w-8 h-8 text-emerald-400 mx-auto" />
+                    <div className="text-xs font-bold text-white">All Teams Evaluated!</div>
+                    <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      Great job! There are no remaining uncompleted teams in Round {activeRound}.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setFilterTab('completed')}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-800 text-xs font-mono font-bold hover:bg-emerald-900 transition-colors"
+                    >
+                      View Completed Teams ({completedCount})
+                    </button>
+                  </>
+                ) : (
+                  <div className="text-xs text-zinc-400 font-mono">No teams match this filter query.</div>
+                )}
+              </div>
+            ) : (
+              filteredTeams.map(t => {
+                const isSelected = t.teamId === currentTeam?.teamId;
+                const isEvaluated = roundEvaluatedTeamIds.has(t.teamId);
 
-              return (
-                <button
-                  key={t.teamId}
-                  onClick={() => setSelectedTeamId(t.teamId)}
-                  className={`w-full p-3 rounded-xl text-left transition-all flex items-center justify-between ${
-                    isSelected
-                      ? 'bg-red-950/70 border border-red-800/80 shadow-glow-subtle'
-                      : 'bg-[#11111e] hover:bg-[#18182a] border border-zinc-800/80'
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <span className="font-mono text-xs font-bold text-red-400">{t.teamId}</span>
-                      <span className="font-bold text-xs text-white truncate max-w-[130px]">{t.teamName}</span>
+                return (
+                  <button
+                    key={t.teamId}
+                    type="button"
+                    onClick={() => setSelectedTeamId(t.teamId)}
+                    className={`w-full p-3 rounded-xl text-left transition-all flex items-center justify-between ${
+                      isSelected
+                        ? 'bg-red-950/70 border border-red-800/80 shadow-glow-subtle'
+                        : 'bg-[#11111e] hover:bg-[#18182a] border border-zinc-800/80'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center space-x-2">
+                        <span className="font-mono text-xs font-bold text-red-400">{t.teamId}</span>
+                        <span className="font-bold text-xs text-white truncate max-w-[130px]">{t.teamName}</span>
+                      </div>
+                      <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
+                        PS: {t.problemStatementId || 'Unassigned'}
+                      </div>
                     </div>
-                    <div className="text-[10px] text-zinc-400 font-mono mt-0.5">
-                      PS: {t.problemStatementId || 'Unassigned'}
-                    </div>
-                  </div>
 
-                  {hasMarks && (
-                    <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono font-bold">
-                      ✓ EVALUATED
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+                    {isEvaluated ? (
+                      <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono font-bold border border-emerald-900/60">
+                        ✓ COMPLETED
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded bg-amber-950/60 text-amber-300 text-[10px] font-mono font-bold border border-amber-900/40">
+                        PENDING
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            )}
           </div>
         </div>
 
@@ -267,11 +512,11 @@ export const ReviewerPortal: React.FC = () => {
           
           {/* Team & Assigned Problem Summary */}
           {currentTeam && (
-            <div className="p-6 rounded-3xl bg-[#0c0c16] border border-zinc-800 space-y-4">
+            <div className="p-6 rounded-3xl bg-[#0c0c16] border border-zinc-800 space-y-4 shadow-xl">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-800 pb-3 gap-2">
                 <div>
                   <div className="flex items-center space-x-2">
-                    <span className="px-2.5 py-0.5 rounded bg-red-950 text-red-400 font-mono text-xs font-bold">
+                    <span className="px-2.5 py-0.5 rounded bg-red-950 text-red-400 font-mono text-xs font-bold border border-red-900/50">
                       {currentTeam.teamId}
                     </span>
                     <h2 className="text-xl font-black text-white font-display">{currentTeam.teamName}</h2>
@@ -297,23 +542,29 @@ export const ReviewerPortal: React.FC = () => {
                 {problemStatement ? (
                   <div>
                     <div className="text-sm font-bold text-white font-display">{problemStatement.problemStatementId} — {problemStatement.title}</div>
-                    <p className="text-xs text-zinc-300 mt-1 leading-relaxed">{problemStatement.shortDescription}</p>
-                    <div className="mt-2 text-[11px] text-zinc-400 font-mono">
-                      Category: {problemStatement.category} • Objective: {problemStatement.objective}
-                    </div>
+                    <p className="text-xs text-zinc-300 mt-1 leading-relaxed">{problemStatement.problemDescription}</p>
                   </div>
                 ) : (
                   <div className="text-xs text-zinc-500 italic">No Problem Statement Assigned</div>
                 )}
               </div>
 
-              {/* Team Members List */}
+              {/* Team Members Chips */}
               <div className="space-y-1">
-                <div className="text-[10px] font-mono text-zinc-400 uppercase">Team Members</div>
+                <div className="text-[10px] font-mono text-zinc-400 uppercase flex items-center space-x-1">
+                  <Users className="w-3 h-3 text-sky-400" />
+                  <span>Team Members ({currentTeam.members.length})</span>
+                </div>
                 <div className="flex flex-wrap gap-2">
                   {currentTeam.members.map(m => (
-                    <span key={m.memberId} className="px-2.5 py-1 rounded-lg bg-[#141424] border border-zinc-800 text-xs text-zinc-300 font-mono">
-                      {m.name} ({m.registrationNumber})
+                    <span key={m.memberId} className="px-2.5 py-1 rounded-lg bg-[#141424] border border-zinc-800 text-xs text-zinc-300 font-mono flex items-center space-x-1">
+                      <span>{m.name}</span>
+                      <span className="text-zinc-500">({m.registrationNumber})</span>
+                      {m.isTeamLead && (
+                        <span className="ml-1 text-[10px] px-1.5 py-0.2 bg-red-950 text-red-300 font-bold rounded">
+                          LEAD
+                        </span>
+                      )}
                     </span>
                   ))}
                 </div>
@@ -322,131 +573,316 @@ export const ReviewerPortal: React.FC = () => {
           )}
 
           {/* Rubric Evaluation Form */}
-          <form onSubmit={handleSubmitScore} className="p-6 md:p-8 rounded-3xl bg-[#0c0c16] border border-red-900/40 space-y-6 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-              <div>
-                <div className="text-xs font-mono text-red-400 uppercase tracking-widest font-bold">ROUND 0{activeRound} EVALUATION RUBRIC</div>
-                <h3 className="text-lg font-bold text-white font-display">Marking Matrix (0–100 Scale)</h3>
-              </div>
-
-              {/* Large Score Counter Display */}
-              <div className="text-right">
-                <div className="text-3xl font-black font-display text-amber-400">
-                  {rawTotal} <span className="text-sm text-zinc-500 font-normal">/ 100</span>
-                </div>
-                <div className="text-[10px] font-mono text-zinc-400">Total Raw Score</div>
-              </div>
-            </div>
-
-            {/* 4 Rubric Sliders */}
-            <div className="space-y-5">
+          {currentTeam && (
+            <form onSubmit={handleSubmitScore} className="p-6 md:p-8 rounded-3xl bg-[#0c0c16] border border-red-900/40 space-y-6 shadow-2xl">
               
-              {/* Pillar 1: Innovation */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-white">1. Innovation & Novelty (Max 25)</span>
-                  <span className="font-mono font-bold text-amber-400">{innovation} / 25</span>
+              {/* Header of Marking Matrix */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-800 pb-4 gap-4">
+                <div>
+                  <div className="text-xs font-mono text-red-400 uppercase tracking-widest font-bold flex items-center space-x-2">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    <span>ROUND 0{activeRound} EVALUATION</span>
+                  </div>
+                  <h3 className="text-lg font-bold text-white font-display mt-0.5">
+                    {activeRound === 2 ? 'Direct Score & Individual Teammate Evaluation' : 'Team Direct Scoring (0–100 Scale)'}
+                  </h3>
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="25"
-                  value={innovation}
-                  disabled={!!existingMarks}
-                  onChange={(e) => setInnovation(Number(e.target.value))}
-                  className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-red-500"
-                />
-              </div>
 
-              {/* Pillar 2: Technical Feasibility */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-white">2. Technical Architecture & Execution (Max 25)</span>
-                  <span className="font-mono font-bold text-amber-400">{techFeasibility} / 25</span>
+                {/* Big Score Counter Display */}
+                <div className="text-left sm:text-right bg-[#121220] px-4 py-2.5 rounded-2xl border border-zinc-800 flex items-center space-x-3 sm:space-x-0 sm:flex-col justify-between">
+                  <div className="text-3xl font-black font-display text-amber-400">
+                    {currentEffectiveTeamScore} <span className="text-sm text-zinc-500 font-normal">/ 100</span>
+                  </div>
+                  <div className="text-[10px] font-mono text-zinc-400 uppercase">Team Total Score</div>
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="25"
-                  value={techFeasibility}
-                  disabled={!!existingMarks}
-                  onChange={(e) => setTechFeasibility(Number(e.target.value))}
-                  className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-red-500"
-                />
               </div>
 
-              {/* Pillar 3: UI/UX & Polish */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-white">3. User Experience & Architecture Polish (Max 25)</span>
-                  <span className="font-mono font-bold text-amber-400">{uiUxArchitecture} / 25</span>
+              {/* DIRECT TEAM MARKS ENTRY SECTION (NO TEDIOUS RUBRIC SLIDERS) */}
+              <div className="p-5 rounded-2xl bg-[#10101c] border border-zinc-800/90 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                  <div>
+                    <div className="text-xs font-mono uppercase tracking-wider text-white font-bold flex items-center space-x-2">
+                      <Sliders className="w-4 h-4 text-amber-400" />
+                      <span>{activeRound === 2 ? 'Step 1: Enter Team Marks (0–100)' : 'Enter Team Marks (0–100)'}</span>
+                    </div>
+                    <div className="text-[11px] text-zinc-400 mt-0.5">
+                      Direct text/number entry — no need to adjust multiple rubrics. Auto-syncs to teammates below.
+                    </div>
+                  </div>
+
+                  {!existingMarks && (
+                    <button
+                      type="button"
+                      onClick={handleSyncAllMembersToTeamScore}
+                      className="px-3 py-1.5 rounded-xl bg-sky-950 hover:bg-sky-900 text-sky-300 border border-sky-800 text-[11px] font-mono font-bold flex items-center space-x-1.5 transition-colors self-start sm:self-auto"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Sync All Teammates to {currentEffectiveTeamScore}</span>
+                    </button>
+                  )}
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="25"
-                  value={uiUxArchitecture}
-                  disabled={!!existingMarks}
-                  onChange={(e) => setUiUxArchitecture(Number(e.target.value))}
-                  className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-red-500"
-                />
-              </div>
 
-              {/* Pillar 4: Presentation & Impact */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-white">4. Presentation, Impact & Q&A Response (Max 25)</span>
-                  <span className="font-mono font-bold text-amber-400">{presentationImpact} / 25</span>
+                {/* Direct Team Score Input Controls */}
+                <div className="flex flex-col md:flex-row items-center justify-between gap-4 pt-1">
+                  
+                  {/* Large Direct Number Input */}
+                  <div className="flex items-center space-x-3 w-full md:w-auto">
+                    <span className="text-xs font-mono text-zinc-400 uppercase font-bold shrink-0">Marks:</span>
+                    <div className="flex items-center bg-[#0a0a12] border-2 border-amber-500/60 focus-within:border-amber-400 rounded-2xl px-4 py-2 shadow-glow-subtle">
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={currentEffectiveTeamScore}
+                        disabled={!!existingMarks}
+                        onChange={(e) => handleDirectTeamScoreChange(parseInt(e.target.value) || 0)}
+                        placeholder="80"
+                        className="w-20 bg-transparent text-center font-mono font-black text-2xl text-amber-400 outline-none"
+                      />
+                      <span className="text-sm font-mono text-zinc-500 font-bold pl-1">/ 100</span>
+                    </div>
+
+                    {/* Stepper Buttons for Team Marks */}
+                    {!existingMarks && (
+                      <div className="flex items-center space-x-1">
+                        <button
+                          type="button"
+                          onClick={() => handleDirectTeamScoreChange(currentEffectiveTeamScore - 5)}
+                          className="px-2.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-bold transition-colors"
+                        >
+                          -5
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDirectTeamScoreChange(currentEffectiveTeamScore + 5)}
+                          className="px-2.5 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-mono font-bold transition-colors"
+                        >
+                          +5
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Quick Preset Buttons */}
+                  {!existingMarks && (
+                    <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto justify-start md:justify-end">
+                      <span className="text-[10px] font-mono text-zinc-500 uppercase mr-1">Presets:</span>
+                      {[65, 70, 75, 80, 85, 90, 95].map(preset => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => handleDirectTeamScoreChange(preset)}
+                          className={`px-2.5 py-1.5 rounded-xl font-mono text-xs font-bold transition-all ${
+                            currentEffectiveTeamScore === preset
+                              ? 'bg-amber-500 text-black shadow-md'
+                              : 'bg-[#18182a] hover:bg-zinc-700 text-zinc-300 border border-zinc-700/80'
+                          }`}
+                        >
+                          {preset}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="25"
-                  value={presentationImpact}
-                  disabled={!!existingMarks}
-                  onChange={(e) => setPresentationImpact(Number(e.target.value))}
-                  className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-red-500"
-                />
               </div>
 
-            </div>
+              {/* ROUND 2 INDIVIDUAL TEAMMATE MARKS SECTION (DIRECT TEXT/NUMBER INPUT FOR EACH INDIVIDUAL) */}
+              {activeRound === 2 && (
+                <div className="space-y-4 pt-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                    <div>
+                      <div className="text-xs font-mono text-sky-400 uppercase tracking-widest font-bold flex items-center space-x-2">
+                        <Users className="w-4 h-4" />
+                        <span>Step 2: Individual Teammate Marks (0–100)</span>
+                      </div>
+                      <div className="text-xs text-zinc-400 mt-0.5">
+                        Directly enter or adjust marks for each member in this team.
+                      </div>
+                    </div>
+                    <div className="text-right bg-[#121220] px-3 py-1.5 rounded-xl border border-zinc-800 inline-block self-start sm:self-auto">
+                      <span className="text-xs font-mono text-zinc-400">Teammate Avg: </span>
+                      <span className="text-sm font-bold font-mono text-emerald-400">{avgMemberScore} / 100</span>
+                    </div>
+                  </div>
 
-            {/* Qualitative Feedback Notes */}
-            <div className="space-y-2 pt-2">
-              <label className="block text-xs font-mono uppercase tracking-wider text-zinc-400">
-                Qualitative Feedback & Jury Notes (Optional)
-              </label>
-              <textarea
-                value={feedbackNotes}
-                disabled={!!existingMarks}
-                onChange={(e) => setFeedbackNotes(e.target.value)}
-                placeholder="Specific technical strengths, scalability remarks, or recommendations..."
-                rows={3}
-                className="w-full px-4 py-2.5 rounded-2xl bg-[#121220] border border-zinc-700 text-xs text-white placeholder-zinc-500 outline-none"
-              />
-            </div>
+                  <div className="space-y-3">
+                    {currentTeam.members.map((member, idx) => {
+                      const memberScore = memberScores[member.memberId] !== undefined ? memberScores[member.memberId] : currentEffectiveTeamScore;
+                      const isCustom = memberScore !== currentEffectiveTeamScore;
+                      const diff = memberScore - currentEffectiveTeamScore;
 
-            {/* Submit Action */}
-            <div className="pt-4 border-t border-zinc-800 flex items-center justify-between">
-              <div className="text-xs font-mono text-zinc-400">
-                {existingMarks ? 'Marks locked and immutable.' : 'Once submitted, marks cannot be altered.'}
-              </div>
+                      return (
+                        <div
+                          key={member.memberId}
+                          className={`p-4 rounded-2xl border transition-all ${
+                            isCustom
+                              ? 'bg-[#151224] border-purple-800/80 shadow-md'
+                              : 'bg-[#10101c] border-zinc-800/80'
+                          }`}
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            
+                            {/* Member Info */}
+                            <div className="flex items-center space-x-3">
+                              <div className="w-9 h-9 rounded-xl bg-[#1e1e30] border border-zinc-700 flex items-center justify-center font-bold text-xs text-white">
+                                {idx + 1}
+                              </div>
+                              <div>
+                                <div className="flex items-center space-x-2">
+                                  <span className="font-bold text-white text-sm">{member.name}</span>
+                                  {member.isTeamLead && (
+                                    <span className="px-1.5 py-0.5 rounded bg-red-950 text-red-300 text-[10px] font-mono font-bold border border-red-800/60">
+                                      TEAM LEAD
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-zinc-400 font-mono">
+                                  Reg: <span className="text-zinc-300">{member.registrationNumber}</span>
+                                </div>
+                              </div>
+                            </div>
 
-              {existingMarks ? (
-                <span className="px-4 py-2.5 rounded-xl bg-zinc-800 text-zinc-400 text-xs font-mono font-bold">
-                  ✓ SUBMITTED
-                </span>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="px-8 py-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs uppercase tracking-wider shadow-glow-crimson transition-all"
-                >
-                  {submitting ? 'Locking Score...' : `Submit & Lock ${rawTotal}/100 Marks`}
-                </button>
+                            {/* Direct Marks Entry & Status */}
+                            <div className="flex items-center space-x-2.5 flex-wrap gap-y-2">
+                              {isCustom ? (
+                                <span className="px-2.5 py-1 rounded-lg bg-purple-950/80 text-purple-300 border border-purple-800 text-[10px] font-mono font-bold">
+                                  {diff > 0 ? `+${diff}` : diff} vs Team ({currentEffectiveTeamScore})
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 rounded-lg bg-zinc-800/80 text-zinc-400 text-[10px] font-mono">
+                                  Matches Team
+                                </span>
+                              )}
+
+                              {/* Direct Number Input Box */}
+                              <div className="flex items-center bg-[#0a0a12] px-3 py-1.5 rounded-xl border border-zinc-700 focus-within:border-sky-500">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  value={memberScore}
+                                  disabled={!!existingMarks}
+                                  onChange={(e) => handleIndividualMemberScoreChange(member.memberId, parseInt(e.target.value) || 0)}
+                                  className="w-14 bg-transparent text-center font-mono font-black text-amber-400 text-base outline-none"
+                                />
+                                <span className="text-xs text-zinc-500 font-mono pr-1">/ 100</span>
+                              </div>
+
+                              {/* Micro step adjustments */}
+                              {!existingMarks && (
+                                <div className="flex items-center space-x-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleIndividualMemberScoreChange(member.memberId, memberScore - 5)}
+                                    className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold"
+                                  >
+                                    -5
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleIndividualMemberScoreChange(member.memberId, memberScore - 1)}
+                                    className="px-1.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold"
+                                  >
+                                    -1
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleIndividualMemberScoreChange(member.memberId, memberScore + 1)}
+                                    className="px-1.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold"
+                                  >
+                                    +1
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleIndividualMemberScoreChange(member.memberId, memberScore + 5)}
+                                    className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] font-mono font-bold"
+                                  >
+                                    +5
+                                  </button>
+                                  {isCustom && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleIndividualMemberScoreChange(member.memberId, currentEffectiveTeamScore)}
+                                      title="Reset to team score"
+                                      className="px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-sky-400 text-[10px] font-mono font-bold"
+                                    >
+                                      Reset
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Individual Remark input */}
+                          <div className="mt-2.5">
+                            <input
+                              type="text"
+                              value={memberFeedback[member.memberId] || ''}
+                              disabled={!!existingMarks}
+                              onChange={(e) => handleIndividualMemberFeedbackChange(member.memberId, e.target.value)}
+                              placeholder={`Remark / feedback for ${member.name} (optional)...`}
+                              className="w-full px-3.5 py-1.5 rounded-xl bg-[#0a0a12] border border-zinc-800 text-xs text-zinc-300 placeholder-zinc-600 outline-none focus:border-zinc-600"
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
-            </div>
-          </form>
+
+              {/* Qualitative Feedback Notes */}
+              <div className="space-y-2 pt-2">
+                <label className="block text-xs font-mono uppercase tracking-wider text-zinc-400">
+                  Overall Qualitative Feedback & Jury Notes (Optional)
+                </label>
+                <textarea
+                  value={feedbackNotes}
+                  disabled={!!existingMarks}
+                  onChange={(e) => setFeedbackNotes(e.target.value)}
+                  placeholder="Specific technical strengths, scalability remarks, architecture remarks, or recommendations..."
+                  rows={3}
+                  className="w-full px-4 py-2.5 rounded-2xl bg-[#121220] border border-zinc-700 text-xs text-white placeholder-zinc-500 outline-none focus:border-red-500 transition-colors"
+                />
+              </div>
+
+              {/* Submit Action */}
+              <div className="pt-4 border-t border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="text-xs font-mono text-zinc-400">
+                  {existingMarks 
+                    ? '✓ Marks locked and immutable for this evaluation round.' 
+                    : activeRound === 2 
+                      ? `Submitting will lock Team score (${currentEffectiveTeamScore}/100) & all individual member marks.` 
+                      : `Submitting will lock Team score (${currentEffectiveTeamScore}/100).`
+                  }
+                </div>
+
+                {existingMarks ? (
+                  <span className="px-5 py-2.5 rounded-xl bg-emerald-950 border border-emerald-800 text-emerald-300 text-xs font-mono font-bold self-start sm:self-auto flex items-center space-x-1.5">
+                    <Check className="w-4 h-4" />
+                    <span>✓ SUBMITTED & LOCKED</span>
+                  </span>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-red-600 via-rose-600 to-red-700 hover:from-red-500 hover:to-rose-500 text-white font-bold text-xs uppercase tracking-wider shadow-glow-crimson transition-all flex items-center justify-center space-x-2 self-start sm:self-auto cursor-pointer"
+                  >
+                    <span>
+                      {submitting 
+                        ? 'Locking Score...' 
+                        : activeRound === 2 
+                          ? `Submit & Lock Team (${currentEffectiveTeamScore}/100) & ${currentTeam.members.length} Members` 
+                          : `Submit & Lock ${currentEffectiveTeamScore}/100 Marks`}
+                    </span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </form>
+          )}
 
         </div>
 

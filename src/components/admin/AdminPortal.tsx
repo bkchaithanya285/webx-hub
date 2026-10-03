@@ -567,6 +567,8 @@ export const AdminPortal: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('ALL');
   const [selectedLogRound, setSelectedLogRound] = useState<'ALL' | 1 | 2 | 3>('ALL');
+  const [reviewViewTab, setReviewViewTab] = useState<'submissions' | 'pending'>('submissions');
+  const [pendingSearchQuery, setPendingSearchQuery] = useState('');
   const [selectedPSForDrawer, setSelectedPSForDrawer] = useState<ProblemStatement | null>(null);
   const [selectedTeam360, setSelectedTeam360] = useState<Team | null>(null);
   const [assignPSModalTeam, setAssignPSModalTeam] = useState<Team | null>(null);
@@ -1747,20 +1749,44 @@ export const AdminPortal: React.FC = () => {
           </div>
         )}
 
-        {/* 6. REVIEW CONTROL (SINGLE OPEN ROUND ENFORCEMENT) */}
+        {/* 6. REVIEW CONTROL (SINGLE OPEN ROUND ENFORCEMENT & PENDING REVIEWS TRACKER) */}
         {activeSection === 'reviews' && (
           <div className="space-y-6">
             
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-black font-display text-white">REVIEW CONTROL</h2>
+                <h2 className="text-2xl font-black font-display text-white">REVIEW CONTROL & EVALUATION TRACKER</h2>
                 <p className="text-xs text-zinc-400 mt-0.5 font-mono">
-                  RULE: <strong>Only ONE round can be OPEN at a time</strong>. Opening a round automatically closes all other rounds.
+                  RULE: <strong>Only ONE round can be OPEN at a time</strong>. Track pending vs completed teams and export verified marks in Excel.
                 </p>
               </div>
 
-              <div className="px-3.5 py-1.5 rounded-xl bg-[#141424] border border-red-900/40 text-xs font-mono text-red-400">
-                Active Round: <span className="text-white font-bold">ROUND 0{reviewSettings.activeRound}</span>
+              <div className="flex items-center space-x-2 flex-wrap gap-y-2">
+                <button
+                  onClick={() => {
+                    eventStore.exportRoundMarksExcel(2);
+                    showNotification('success', 'Generated & Downloaded Round 2 Marks Excel (.xlsx) with team and individual teammate scores.');
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-950 hover:bg-emerald-900 border border-emerald-800 text-emerald-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export R2 Excel (.xlsx)</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    eventStore.exportAllMarksExcel();
+                    showNotification('success', 'Generated & Downloaded All Evaluation Marks Excel (.xlsx).');
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-red-950 hover:bg-red-900 border border-red-800 text-red-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition-colors cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export All (.xlsx)</span>
+                </button>
+
+                <div className="px-3.5 py-1.5 rounded-xl bg-[#141424] border border-red-900/40 text-xs font-mono text-red-400">
+                  Active Round: <span className="text-white font-bold">ROUND 0{reviewSettings.activeRound}</span>
+                </div>
               </div>
             </div>
 
@@ -1774,11 +1800,12 @@ export const AdminPortal: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {[
                   { roundNum: 1 as const, title: "ROUND 1", desc: "Ideation & Architecture", status: reviewSettings.round1Status },
-                  { roundNum: 2 as const, title: "ROUND 2", desc: "Mid-Way Implementation", status: reviewSettings.round2Status },
+                  { roundNum: 2 as const, title: "ROUND 2", desc: "Mid-Way Implementation (Individual Marks)", status: reviewSettings.round2Status },
                   { roundNum: 3 as const, title: "ROUND 3", desc: "Final Demo & Presentation", status: reviewSettings.round3Status }
                 ].map(r => {
                   const isOpen = r.status === 'OPEN';
                   const marksCount = reviewMarks.filter(m => m.round === r.roundNum).length;
+                  const pendingCount = Math.max(0, teams.length - marksCount);
 
                   return (
                     <div
@@ -1798,9 +1825,12 @@ export const AdminPortal: React.FC = () => {
                         </span>
                       </div>
 
-                      <div className="text-xs text-zinc-400">
+                      <div className="text-xs text-zinc-400 space-y-1">
                         <div className="font-semibold text-zinc-200">{r.desc}</div>
-                        <div className="font-mono text-[11px] text-zinc-500 mt-1">{marksCount} Submissions Recorded</div>
+                        <div className="flex items-center justify-between text-[11px] font-mono pt-1">
+                          <span className="text-emerald-400 font-bold">{marksCount} Done</span>
+                          <span className="text-amber-400 font-bold">{pendingCount} Pending</span>
+                        </div>
                       </div>
 
                       <div className="pt-3 border-t border-zinc-800/80 space-y-2">
@@ -1837,16 +1867,43 @@ export const AdminPortal: React.FC = () => {
               </div>
             </div>
 
-            {/* Submissions Inspector Table - Automatic Min-Max Normalization Matrix */}
+            {/* Submissions & Pending Review Teams Inspection Matrix */}
             <div className="rounded-2xl bg-[#0c0c16] border border-zinc-800 p-5 space-y-4">
+              
+              {/* Primary Tab Switcher: Evaluated Submissions vs Pending Review Teams */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-800 pb-3">
-                <div>
-                  <div className="text-xs font-mono uppercase tracking-wider text-white font-bold flex items-center space-x-2">
-                    <span>AUTOMATIC MIN-MAX NORMALIZATION MATRIX</span>
-                  </div>
-                  <div className="text-[11px] font-mono text-zinc-400 mt-0.5">
-                    Min/Max calculated dynamically per Reviewer & Round. All team normalized marks auto-recalculate on every submission.
-                  </div>
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => setReviewViewTab('submissions')}
+                    className={`px-4 py-2 rounded-xl text-xs font-mono font-bold transition-all flex items-center space-x-1.5 ${
+                      reviewViewTab === 'submissions'
+                        ? 'bg-gradient-to-r from-red-600 to-rose-600 text-white shadow-md'
+                        : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'
+                    }`}
+                  >
+                    <Award className="w-3.5 h-3.5" />
+                    <span>Evaluated Submissions ({reviewMarks.length})</span>
+                  </button>
+
+                  <button
+                    onClick={() => setReviewViewTab('pending')}
+                    className={`px-4 py-2 rounded-xl text-xs font-mono font-bold transition-all flex items-center space-x-1.5 ${
+                      reviewViewTab === 'pending'
+                        ? 'bg-amber-600 text-white shadow-md'
+                        : 'bg-zinc-900 text-zinc-400 hover:text-white border border-zinc-800'
+                    }`}
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span>
+                      Pending Review Teams ({
+                        (() => {
+                          const targetRnd = selectedLogRound === 'ALL' ? reviewSettings.activeRound : selectedLogRound;
+                          const evaluated = new Set(reviewMarks.filter(m => m.round === targetRnd).map(m => m.teamId));
+                          return teams.filter(t => !evaluated.has(t.teamId)).length;
+                        })()
+                      })
+                    </span>
+                  </button>
                 </div>
 
                 {/* Round Filter Tabs */}
@@ -1859,146 +1916,255 @@ export const AdminPortal: React.FC = () => {
                         : 'bg-zinc-800/80 text-zinc-400 hover:text-white'
                     }`}
                   >
-                    All Rounds ({reviewMarks.length})
+                    All Rounds
                   </button>
-                  <button
-                    onClick={() => setSelectedLogRound(1)}
-                    className={`px-3 py-1.5 rounded-lg transition-all ${
-                      selectedLogRound === 1
-                        ? 'bg-red-600 text-white font-bold shadow-md'
-                        : 'bg-zinc-800/80 text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Round 1 ({reviewMarks.filter(m => m.round === 1).length})
-                  </button>
-                  <button
-                    onClick={() => setSelectedLogRound(2)}
-                    className={`px-3 py-1.5 rounded-lg transition-all ${
-                      selectedLogRound === 2
-                        ? 'bg-red-600 text-white font-bold shadow-md'
-                        : 'bg-zinc-800/80 text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Round 2 ({reviewMarks.filter(m => m.round === 2).length})
-                  </button>
-                  <button
-                    onClick={() => setSelectedLogRound(3)}
-                    className={`px-3 py-1.5 rounded-lg transition-all ${
-                      selectedLogRound === 3
-                        ? 'bg-red-600 text-white font-bold shadow-md'
-                        : 'bg-zinc-800/80 text-zinc-400 hover:text-white'
-                    }`}
-                  >
-                    Round 3 ({reviewMarks.filter(m => m.round === 3).length})
-                  </button>
+                  {[1, 2, 3].map(rnd => (
+                    <button
+                      key={rnd}
+                      onClick={() => setSelectedLogRound(rnd as any)}
+                      className={`px-3 py-1.5 rounded-lg transition-all ${
+                        selectedLogRound === rnd
+                          ? 'bg-red-600 text-white font-bold shadow-md'
+                          : 'bg-zinc-800/80 text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      Round {rnd}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Table / Empty State */}
-              {(() => {
-                const filteredMarks = reviewMarks.filter(m => selectedLogRound === 'ALL' || m.round === selectedLogRound);
+              {/* VIEW 1: EVALUATED SUBMISSIONS */}
+              {reviewViewTab === 'submissions' && (
+                <div>
+                  {(() => {
+                    const filteredMarks = reviewMarks.filter(m => selectedLogRound === 'ALL' || m.round === selectedLogRound);
 
-                if (filteredMarks.length === 0) {
-                  return (
-                    <div className="py-12 text-center space-y-2">
-                      <div className="text-zinc-500 font-mono text-xs">
-                        {selectedLogRound === 'ALL'
-                          ? 'No review evaluations recorded yet.'
-                          : `No submissions recorded yet for Round ${selectedLogRound}. Awaiting jury evaluations.`}
-                      </div>
-                      <div className="text-[11px] text-zinc-600 font-light">
-                        When reviewers submit marks on their scoring station during Round {selectedLogRound === 'ALL' ? '' : selectedLogRound}, they will appear here in real time.
-                      </div>
-                    </div>
-                  );
-                }
+                    if (filteredMarks.length === 0) {
+                      return (
+                        <div className="py-12 text-center space-y-2">
+                          <div className="text-zinc-500 font-mono text-xs">
+                            {selectedLogRound === 'ALL'
+                              ? 'No review evaluations recorded yet.'
+                              : `No submissions recorded yet for Round ${selectedLogRound}. Awaiting jury evaluations.`}
+                          </div>
+                          <div className="text-[11px] text-zinc-600 font-light">
+                            When reviewers submit marks on their scoring station during Round {selectedLogRound === 'ALL' ? '' : selectedLogRound}, they will appear here in real time.
+                          </div>
+                        </div>
+                      );
+                    }
 
-                return (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead>
-                        <tr className="border-b border-zinc-800 text-zinc-400 font-mono uppercase text-[10px]">
-                          <th className="pb-2">Round</th>
-                          <th className="pb-2">Team</th>
-                          <th className="pb-2">Reviewer</th>
-                          <th className="pb-2">Raw Score</th>
-                          <th className="pb-2">Reviewer Avg</th>
-                          <th className="pb-2">Target Benchmark</th>
-                          <th className="pb-2">Normalized Score</th>
-                          <th className="pb-2 text-right">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-zinc-800/60 font-mono">
-                        {filteredMarks.map(m => {
-                          const norm = normalizedScores.find(n => n.round === m.round && n.teamId === m.teamId && n.reviewerUid === m.reviewerUid);
-                          const t = teams.find(team => team.teamId === m.teamId);
-
-                          return (
-                            <tr key={m.id} className="hover:bg-zinc-900/40">
-                              <td className="py-2.5 text-red-400 font-bold">R{m.round}</td>
-                              <td className="py-2.5">
-                                <span className="font-bold text-white block">{m.teamId}</span>
-                                <span className="text-[10px] text-zinc-400 font-sans">{t?.teamName || ''}</span>
-                              </td>
-                              <td className="py-2.5 text-zinc-300 font-sans">{m.reviewerName}</td>
-                              <td className="py-2.5">
-                                <div className="text-amber-400 font-bold">{m.rawScore} / 100</div>
-                                {m.memberScores && m.memberScores.length > 0 && (
-                                  <div className="text-[10px] text-zinc-400 font-sans mt-0.5 space-y-0.5">
-                                    <div className="flex flex-wrap gap-1 mt-0.5">
-                                      {m.memberScores.map(ms => (
-                                        <span key={ms.memberId} className="px-1.5 py-0.5 bg-zinc-800/90 border border-zinc-700/60 rounded text-[9px] text-zinc-300 font-mono">
-                                          {ms.name.split(' ')[0]}: <strong className="text-amber-300">{ms.score}</strong>
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </td>
-                              <td className="py-2.5 text-zinc-400">
-                                {norm?.reviewerMean !== undefined ? `${norm.reviewerMean.toFixed(1)}` : norm?.minimumReviewerScore !== undefined ? `${norm.minimumReviewerScore}-${norm.maximumReviewerScore}` : '—'}
-                              </td>
-                              <td className="py-2.5 text-sky-400 font-mono text-[11px]">
-                                {norm?.targetMean !== undefined ? `75.0 (${(75.0 - (norm.reviewerMean || 75)).toFixed(1) >= '0' ? `+${(75.0 - (norm.reviewerMean || 75)).toFixed(1)}` : (75.0 - (norm.reviewerMean || 75)).toFixed(1)})` : '75.0'}
-                              </td>
-                              <td className="py-2.5">
-                                {norm ? (
-                                  <span className="px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold text-[11px]">
-                                    {norm.normalizedScore.toFixed(2)}
-                                  </span>
-                                ) : (
-                                  <span className="text-zinc-600">Pending</span>
-                                )}
-                              </td>
-                              <td className="py-2.5 text-right">
-                                <button
-                                  onClick={() => {
-                                    setScoreCorrectionModal({
-                                      isOpen: true,
-                                      markId: m.id,
-                                      round: m.round,
-                                      teamId: m.teamId,
-                                      reviewerUid: m.reviewerUid,
-                                      reviewerName: m.reviewerName,
-                                      oldScore: m.rawScore,
-                                      newScore: m.rawScore,
-                                      reason: ''
-                                    });
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-red-950 text-zinc-300 hover:text-red-300 text-[10px] uppercase font-bold border border-zinc-700 transition-colors"
-                                  title="Authorized Admin score correction with audit trail"
-                                >
-                                  Correct Score
-                                </button>
-                              </td>
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="border-b border-zinc-800 text-zinc-400 font-mono uppercase text-[10px]">
+                              <th className="pb-2">Round</th>
+                              <th className="pb-2">Team</th>
+                              <th className="pb-2">Reviewer</th>
+                              <th className="pb-2">Raw Score</th>
+                              <th className="pb-2">Reviewer Avg</th>
+                              <th className="pb-2">Target Benchmark</th>
+                              <th className="pb-2">Normalized Score</th>
+                              <th className="pb-2 text-right">Action</th>
                             </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-800/60 font-mono">
+                            {filteredMarks.map(m => {
+                              const norm = normalizedScores.find(n => n.round === m.round && n.teamId === m.teamId && n.reviewerUid === m.reviewerUid);
+                              const t = teams.find(team => team.teamId === m.teamId);
+
+                              return (
+                                <tr key={m.id} className="hover:bg-zinc-900/40">
+                                  <td className="py-2.5 text-red-400 font-bold">R{m.round}</td>
+                                  <td className="py-2.5">
+                                    <span className="font-bold text-white block">{m.teamId}</span>
+                                    <span className="text-[10px] text-zinc-400 font-sans">{t?.teamName || ''}</span>
+                                  </td>
+                                  <td className="py-2.5 text-zinc-300 font-sans">{m.reviewerName}</td>
+                                  <td className="py-2.5">
+                                    <div className="text-amber-400 font-bold">{m.rawScore} / 100</div>
+                                    {m.memberScores && m.memberScores.length > 0 && (
+                                      <div className="text-[10px] text-zinc-400 font-sans mt-0.5 space-y-0.5">
+                                        <div className="flex flex-wrap gap-1 mt-0.5">
+                                          {m.memberScores.map(ms => (
+                                            <span key={ms.memberId} className="px-1.5 py-0.5 bg-zinc-800/90 border border-zinc-700/60 rounded text-[9px] text-zinc-300 font-mono">
+                                              {ms.name.split(' ')[0]}: <strong className="text-amber-300">{ms.score}</strong>
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td className="py-2.5 text-zinc-400">
+                                    {norm?.reviewerMean !== undefined ? `${norm.reviewerMean.toFixed(1)}` : norm?.minimumReviewerScore !== undefined ? `${norm.minimumReviewerScore}-${norm.maximumReviewerScore}` : '—'}
+                                  </td>
+                                  <td className="py-2.5 text-sky-400 font-mono text-[11px]">
+                                    {norm?.targetMean !== undefined ? `75.0 (${(75.0 - (norm.reviewerMean || 75)).toFixed(1) >= '0' ? `+${(75.0 - (norm.reviewerMean || 75)).toFixed(1)}` : (75.0 - (norm.reviewerMean || 75)).toFixed(1)})` : '75.0'}
+                                  </td>
+                                  <td className="py-2.5">
+                                    {norm ? (
+                                      <span className="px-2.5 py-1 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800 font-bold text-[11px]">
+                                        {norm.normalizedScore.toFixed(2)}
+                                      </span>
+                                    ) : (
+                                      <span className="text-zinc-600">Pending</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2.5 text-right">
+                                    <button
+                                      onClick={() => {
+                                        setScoreCorrectionModal({
+                                          isOpen: true,
+                                          markId: m.id,
+                                          round: m.round,
+                                          teamId: m.teamId,
+                                          reviewerUid: m.reviewerUid,
+                                          reviewerName: m.reviewerName,
+                                          oldScore: m.rawScore,
+                                          newScore: m.rawScore,
+                                          reason: ''
+                                        });
+                                      }}
+                                      className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-red-950 text-zinc-300 hover:text-red-300 text-[10px] uppercase font-bold border border-zinc-700 transition-colors cursor-pointer"
+                                      title="Authorized Admin score correction with audit trail"
+                                    >
+                                      Correct Score
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* VIEW 2: PENDING REVIEW TEAMS (SPECIFICALLY FOR ADMIN TO TRACK WHO STILL NEEDS REVIEW) */}
+              {reviewViewTab === 'pending' && (
+                <div className="space-y-4">
+                  {/* Search and Action Bar */}
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div className="relative w-full sm:w-80">
+                      <input
+                        type="text"
+                        value={pendingSearchQuery}
+                        onChange={(e) => setPendingSearchQuery(e.target.value)}
+                        placeholder="Filter pending teams by ID, name, lead..."
+                        className="w-full px-3.5 py-2 pl-9 rounded-xl bg-[#121220] border border-zinc-700 text-xs text-white placeholder-zinc-500 outline-none focus:border-amber-500 transition-colors"
+                      />
+                      <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-3" />
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        const targetRnd = selectedLogRound === 'ALL' ? reviewSettings.activeRound : selectedLogRound;
+                        eventStore.exportRoundMarksExcel(targetRnd);
+                        showNotification('success', `Exported Round ${targetRnd} Excel spreadsheet including all Pending Review Teams.`);
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-amber-950 hover:bg-amber-900 border border-amber-800 text-amber-300 text-xs font-mono font-bold flex items-center space-x-1.5 transition-colors cursor-pointer self-start sm:self-auto"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Export Pending Teams Excel (.xlsx)</span>
+                    </button>
                   </div>
-                );
-              })()}
+
+                  {/* Pending Teams Table */}
+                  {(() => {
+                    const targetRnd = selectedLogRound === 'ALL' ? reviewSettings.activeRound : selectedLogRound;
+                    const evaluatedSet = new Set(reviewMarks.filter(m => m.round === targetRnd).map(m => m.teamId));
+                    let pendingList = teams.filter(t => !evaluatedSet.has(t.teamId));
+
+                    if (pendingSearchQuery.trim()) {
+                      const q = pendingSearchQuery.toLowerCase().trim();
+                      pendingList = pendingList.filter(t => 
+                        t.teamId.toLowerCase().includes(q) ||
+                        t.teamName.toLowerCase().includes(q) ||
+                        (t.problemStatementId && t.problemStatementId.toLowerCase().includes(q)) ||
+                        t.members.some(m => m.name.toLowerCase().includes(q) || m.registrationNumber.toLowerCase().includes(q))
+                      );
+                    }
+
+                    if (pendingList.length === 0) {
+                      return (
+                        <div className="py-12 text-center space-y-2 bg-[#121220] rounded-2xl border border-zinc-800">
+                          <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto" />
+                          <div className="text-sm font-bold text-white">All Teams Evaluated in Round {targetRnd}!</div>
+                          <p className="text-xs text-zinc-400">
+                            There are zero pending teams remaining for this evaluation round.
+                          </p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs font-mono">
+                          <thead>
+                            <tr className="border-b border-zinc-800 text-zinc-400 uppercase text-[10px]">
+                              <th className="pb-2.5">Team ID</th>
+                              <th className="pb-2.5">Team Name</th>
+                              <th className="pb-2.5">Problem Statement</th>
+                              <th className="pb-2.5">Team Lead</th>
+                              <th className="pb-2.5">Lead Contact</th>
+                              <th className="pb-2.5">Members</th>
+                              <th className="pb-2.5 text-right">Review Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-800/60">
+                            {pendingList.map(team => {
+                              const lead = team.members.find(m => m.isTeamLead) || team.members[0];
+                              const ps = team.problemStatementId ? eventStore.getProblemStatement(team.problemStatementId) : null;
+
+                              return (
+                                <tr key={team.teamId} className="hover:bg-zinc-900/40">
+                                  <td className="py-3">
+                                    <span className="px-2 py-0.5 rounded bg-red-950 text-red-400 font-bold border border-red-900/60">
+                                      {team.teamId}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 text-white font-sans font-bold">
+                                    {team.teamName}
+                                  </td>
+                                  <td className="py-3 text-zinc-300">
+                                    {team.problemStatementId ? (
+                                      <div>
+                                        <span className="font-bold text-red-300">{team.problemStatementId}</span>
+                                        <span className="text-[11px] text-zinc-400 font-sans block truncate max-w-xs">{ps?.title || ''}</span>
+                                      </div>
+                                    ) : (
+                                      <span className="text-zinc-600 italic">Unassigned</span>
+                                    )}
+                                  </td>
+                                  <td className="py-3 text-zinc-300 font-sans">
+                                    {lead?.name || 'N/A'} <span className="text-zinc-500 text-[10px] font-mono">({lead?.registrationNumber})</span>
+                                  </td>
+                                  <td className="py-3 text-zinc-400">
+                                    {lead?.phone || 'N/A'}
+                                  </td>
+                                  <td className="py-3 text-zinc-300">
+                                    {team.members.length}
+                                  </td>
+                                  <td className="py-3 text-right">
+                                    <span className="px-2.5 py-1 rounded-full bg-amber-950/80 text-amber-300 border border-amber-800/70 font-bold text-[10px]">
+                                      ⏳ PENDING ROUND 0{targetRnd}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
             </div>
 
           </div>
@@ -2100,6 +2266,62 @@ export const AdminPortal: React.FC = () => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {/* 1. ROUND 2 EXCEL REPORT (TEAMS + INDIVIDUAL TEAMMATES + PENDING) */}
+              <div className="p-5 rounded-2xl bg-gradient-to-br from-[#0e1d16] to-[#0c0c16] border border-emerald-900/70 space-y-3 flex flex-col justify-between shadow-lg">
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 text-[10px] font-mono font-bold">
+                      EXCEL .XLSX
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-800 text-[10px] font-mono font-bold">
+                      ROUND 2
+                    </span>
+                  </div>
+                  <h3 className="text-sm font-bold text-white font-display mt-2">Round 2 Marks & Teammate Scores</h3>
+                  <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
+                    Complete 3-sheet Excel spreadsheet containing Round 2 Team Scores, Individual Teammate Marks & Remarks, and Pending Review Teams.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    eventStore.exportRoundMarksExcel(2);
+                    showNotification('success', 'Downloaded Round 2 Marks & Teammates Excel Workbook (.xlsx)');
+                  }}
+                  className="w-full flex items-center justify-center space-x-2 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition-all shadow-md cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Excel (.xlsx)</span>
+                </button>
+              </div>
+
+              {/* 2. ALL ROUNDS MARKS + LEADERBOARD EXCEL */}
+              <div className="p-5 rounded-2xl bg-gradient-to-br from-[#1d0e14] to-[#0c0c16] border border-red-900/70 space-y-3 flex flex-col justify-between shadow-lg">
+                <div>
+                  <div className="flex items-center space-x-2">
+                    <span className="px-2 py-0.5 rounded bg-red-950 text-red-300 border border-red-800 text-[10px] font-mono font-bold">
+                      EXCEL .XLSX
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[10px] font-mono font-bold">
+                      ALL MODULES
+                    </span>
+                  </div>
+                  <h3 className="text-sm font-bold text-white font-display mt-2">All Evaluation Marks & Leaderboard</h3>
+                  <p className="text-xs text-zinc-300 mt-1 leading-relaxed">
+                    Multi-sheet Excel workbook with Round 1, 2, 3 raw & normalized scores, Official Leaderboard, and individual teammate scores.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    eventStore.exportAllMarksExcel();
+                    showNotification('success', 'Downloaded Complete All Marks Excel Workbook (.xlsx)');
+                  }}
+                  className="w-full flex items-center justify-center space-x-2 py-2.5 px-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-xs font-bold text-white transition-all shadow-md cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Excel (.xlsx)</span>
+                </button>
+              </div>
+
               {[
                 {
                   title: "Complete Teams & Leads",
