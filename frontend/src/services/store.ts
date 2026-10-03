@@ -888,7 +888,8 @@ class EventStore {
         const response = await fetch(`${BACKEND_URL}/api/selectProblemStatement`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ teamId: cleanTeamId, problemStatementId, actorUid })
+          body: JSON.stringify({ teamId: cleanTeamId, problemStatementId, actorUid }),
+          signal: AbortSignal.timeout(1500)
         });
 
         const data = await response.json().catch(() => ({}));
@@ -896,7 +897,7 @@ class EventStore {
           const errMsg = data.error || `Problem Statement is already full. Maximum ${maxTeams} teams reached.`;
           // Trigger sync to get latest remote state
           try {
-            const syncRes = await fetch(`${BACKEND_URL}/api/syncState`);
+            const syncRes = await fetch(`${BACKEND_URL}/api/syncState`, { signal: AbortSignal.timeout(1000) });
             if (syncRes.ok) {
               const syncData = await syncRes.json();
               if (syncData.problemSelections) {
@@ -909,7 +910,7 @@ class EventStore {
           return { success: false, error: errMsg };
         }
       } catch (networkErr: any) {
-        console.warn("[Store Selection Network Warning]:", networkErr);
+        console.warn("[Store Selection Fast-Path Note]:", networkErr?.message || networkErr);
       }
     }
 

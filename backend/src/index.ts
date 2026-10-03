@@ -905,144 +905,153 @@ const handleSelectProblem = async (req: express.Request, res: express.Response) 
       });
     }
 
-    // 2. Authoritative Firestore Transaction with concurrency lock
-    try {
-      await db.runTransaction(async (transaction) => {
-        // A. Check selection control & settings
-        const controlDoc = await transaction.get(db.doc("problemSelectionControl/current"));
-        const controlData = controlDoc.exists ? controlDoc.data()! : {};
-        const selSettingsDoc = await transaction.get(db.doc("selectionSettings/current"));
-        const selSettings = selSettingsDoc.exists ? selSettingsDoc.data()! : {};
+    // 2. Authoritative Concurrency Control
+    const hasGcpAuth = Boolean(process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.K_SERVICE || process.env.FUNCTION_NAME);
+    if (hasGcpAuth) {
+      try {
+        await db.runTransaction(async (transaction) => {
+          // A. Check selection control & settings
+          const controlDoc = await transaction.get(db.doc("problemSelectionControl/current"));
+          const controlData = controlDoc.exists ? controlDoc.data()! : {};
+          const selSettingsDoc = await transaction.get(db.doc("selectionSettings/current"));
+          const selSettings = selSettingsDoc.exists ? selSettingsDoc.data()! : {};
 
-        const combinedSettings = { ...backendSelectionSettings, ...controlData, ...selSettings };
-        const now = Date.now();
+          const combinedSettings = { ...backendSelectionSettings, ...controlData, ...selSettings };
+          const now = Date.now();
 
-        if (combinedSettings.releaseState === 'NOT_RELEASED' || combinedSettings.status === 'NOT_RELEASED' || combinedSettings.status === 'DRAFT') {
-          throw new Error("Problem Statements have not been released yet.");
-        }
-        if (combinedSettings.selectionState === 'LOCKED' || combinedSettings.status === 'LOCKED') {
-          throw new Error("Problem Statement Selection is currently locked.");
-        }
-        if (combinedSettings.selectionState === 'CLOSED' || combinedSettings.status === 'CLOSED') {
-          throw new Error("Problem Statement selection is currently closed.");
-        }
-        if (combinedSettings.closeAt) {
-          const closeTime = new Date(combinedSettings.closeAt).getTime();
-          if (now >= closeTime) {
-            throw new Error("Problem Statement selection window has closed.");
+          if (combinedSettings.releaseState === 'NOT_RELEASED' || combinedSettings.status === 'NOT_RELEASED' || combinedSettings.status === 'DRAFT') {
+            throw new Error("Problem Statements have not been released yet.");
           }
-        }
-
-        // B. Validate Team
-        const teamRef = db.doc(`teams/${cleanId}`);
-        const teamDoc = await transaction.get(teamRef);
-        if (teamDoc.exists) {
-          const teamData = teamDoc.data()!;
-          if (teamData.problemStatementId && teamData.problemStatementId !== cleanPsId) {
-            throw new Error(`Team ${cleanId} has already selected problem statement ${teamData.problemStatementId}.`);
+          if (combinedSettings.selectionState === 'LOCKED' || combinedSettings.status === 'LOCKED') {
+            throw new Error("Problem Statement Selection is currently locked.");
           }
-        }
-
-        // Check problemSelections
-        const selRef = db.doc(`problemSelections/${cleanId}`);
-        const selDoc = await transaction.get(selRef);
-        if (selDoc.exists) {
-          const selData = selDoc.data()!;
-          if (selData.active && selData.problemStatementId && selData.problemStatementId !== cleanPsId) {
-            throw new Error(`Team ${cleanId} has already selected problem statement ${selData.problemStatementId}.`);
+          if (combinedSettings.selectionState === 'CLOSED' || combinedSettings.status === 'CLOSED') {
+            throw new Error("Problem Statement selection is currently closed.");
           }
-        }
+          if (combinedSettings.closeAt) {
+            const closeTime = new Date(combinedSettings.closeAt).getTime();
+            if (now >= closeTime) {
+              throw new Error("Problem Statement selection window has closed.");
+            }
+          }
 
-        // C. Validate Problem Statement & Capacity Limit (Strict max 2)
-        const psRef = db.doc(`problemStatements/${cleanPsId}`);
-        const psDoc = await transaction.get(psRef);
-        const psData = psDoc.exists ? psDoc.data()! : {};
-        const maxCapacity = typeof psData.maximumTeams === 'number' ? psData.maximumTeams : 2;
-        const psTitle = psData.title || cleanPsId;
+          // B. Validate Team
+          const teamRef = db.doc(`teams/${cleanId}`);
+          const teamDoc = await transaction.get(teamRef);
+          if (teamDoc.exists) {
+            const teamData = teamDoc.data()!;
+            if (teamData.problemStatementId && teamData.problemStatementId !== cleanPsId) {
+              throw new Error(`Team ${cleanId} has already selected problem statement ${teamData.problemStatementId}.`);
+            }
+          }
 
-        const allocRef = db.doc(`problemStatementAllocations/${cleanPsId}`);
-        const allocDoc = await transaction.get(allocRef);
-        const allocData = allocDoc.exists ? allocDoc.data()! : { currentTeamCount: 0, allocatedTeamIds: [] };
+          // Check problemSelections
+          const selRef = db.doc(`problemSelections/${cleanId}`);
+          const selDoc = await transaction.get(selRef);
+          if (selDoc.exists) {
+            const selData = selDoc.data()!;
+            if (selData.active && selData.problemStatementId && selData.problemStatementId !== cleanPsId) {
+              throw new Error(`Team ${cleanId} has already selected problem statement ${selData.problemStatementId}.`);
+            }
+          }
 
-        const existingAllocated = (allocData.allocatedTeamIds || []).filter(
-          (id: string) => id && id.toUpperCase() !== cleanId
-        );
+          // C. Validate Problem Statement & Capacity Limit (Strict max 2)
+          const psRef = db.doc(`problemStatements/${cleanPsId}`);
+          const psDoc = await transaction.get(psRef);
+          const psData = psDoc.exists ? psDoc.data()! : {};
+          const maxCapacity = typeof psData.maximumTeams === 'number' ? psData.maximumTeams : 2;
+          const psTitle = psData.title || cleanPsId;
 
-        if (existingAllocated.length >= maxCapacity) {
-          throw new Error(`THIS PROBLEM STATEMENT IS NOW FULL. Maximum capacity of ${maxCapacity} teams reached.`);
-        }
+          const allocRef = db.doc(`problemStatementAllocations/${cleanPsId}`);
+          const allocDoc = await transaction.get(allocRef);
+          const allocData = allocDoc.exists ? allocDoc.data()! : { currentTeamCount: 0, allocatedTeamIds: [] };
 
-        const updatedAllocated = [...existingAllocated, cleanId];
+          const existingAllocated = (allocData.allocatedTeamIds || []).filter(
+            (id: string) => id && id.toUpperCase() !== cleanId
+          );
 
-        // Commit updates inside transaction
-        transaction.set(allocRef, {
-          problemStatementId: cleanPsId,
-          maximumTeams: maxCapacity,
-          currentTeamCount: updatedAllocated.length,
-          allocatedTeamIds: updatedAllocated,
-          updatedAt: nowIso
-        }, { merge: true });
+          if (existingAllocated.length >= maxCapacity) {
+            throw new Error(`THIS PROBLEM STATEMENT IS NOW FULL. Maximum capacity of ${maxCapacity} teams reached.`);
+          }
 
-        transaction.set(selRef, {
-          teamId: cleanId,
-          teamName: (teamDoc.exists && teamDoc.data()?.teamName) || cleanId,
-          problemStatementId: cleanPsId,
-          psTitle: psTitle,
-          selectedAt: nowIso,
-          selectedBy: actorUid,
-          active: true
-        }, { merge: true });
+          const updatedAllocated = [...existingAllocated, cleanId];
 
-        if (teamDoc.exists) {
-          transaction.update(teamRef, {
+          // Commit updates inside transaction
+          transaction.set(allocRef, {
             problemStatementId: cleanPsId,
-            problemSelectedAt: nowIso,
-            updatedAt: nowIso
-          });
-        } else {
-          transaction.set(teamRef, {
-            teamId: cleanId,
-            problemStatementId: cleanPsId,
-            problemSelectedAt: nowIso,
+            maximumTeams: maxCapacity,
+            currentTeamCount: updatedAllocated.length,
+            allocatedTeamIds: updatedAllocated,
             updatedAt: nowIso
           }, { merge: true });
-        }
 
-        const auditRef = db.collection("auditLogs").doc();
-        transaction.set(auditRef, {
-          id: auditRef.id,
-          timestamp: admin.firestore.FieldValue.serverTimestamp(),
-          actorUid,
-          actorName: `${cleanId} Lead`,
-          actorRole: "team_lead",
-          action: "PROBLEM_STATEMENT_SELECTED",
-          targetType: "selection",
-          targetId: cleanId,
-          metadata: {
+          transaction.set(selRef, {
             teamId: cleanId,
+            teamName: (teamDoc.exists && teamDoc.data()?.teamName) || cleanId,
             problemStatementId: cleanPsId,
-            slotNumber: updatedAllocated.length,
-            maxCapacity
-          }
-        });
-      });
-    } catch (txErr: any) {
-      const isAuthOrCredError = txErr?.message && (
-        txErr.message.includes("default credentials") ||
-        txErr.message.includes("Could not load") ||
-        txErr.message.includes("UNAUTHENTICATED") ||
-        txErr.message.includes("offline")
-      );
+            psTitle: psTitle,
+            selectedAt: nowIso,
+            selectedBy: actorUid,
+            active: true
+          }, { merge: true });
 
-      if (isAuthOrCredError) {
-        console.warn("[Backend Note] Running in standalone in-memory mode without ADC cloud credentials.");
-      } else {
+          if (teamDoc.exists) {
+            transaction.update(teamRef, {
+              problemStatementId: cleanPsId,
+              problemSelectedAt: nowIso,
+              updatedAt: nowIso
+            });
+          } else {
+            transaction.set(teamRef, {
+              teamId: cleanId,
+              problemStatementId: cleanPsId,
+              problemSelectedAt: nowIso,
+              updatedAt: nowIso
+            }, { merge: true });
+          }
+
+          const auditRef = db.collection("auditLogs").doc();
+          transaction.set(auditRef, {
+            id: auditRef.id,
+            timestamp: admin.firestore.FieldValue.serverTimestamp(),
+            actorUid,
+            actorName: `${cleanId} Lead`,
+            actorRole: "team_lead",
+            action: "PROBLEM_STATEMENT_SELECTED",
+            targetType: "selection",
+            targetId: cleanId,
+            metadata: {
+              teamId: cleanId,
+              problemStatementId: cleanPsId,
+              slotNumber: updatedAllocated.length,
+              maxCapacity
+            }
+          });
+        });
+      } catch (txErr: any) {
         console.warn("[Backend Selection Transaction Error]:", txErr?.message);
         return res.status(409).json({
           success: false,
           error: txErr.message || "Problem statement selection failed."
         });
       }
+    } else {
+      // High-speed non-blocking background write for local/standalone servers
+      try {
+        db.doc(`teams/${cleanId}`).set({
+          teamId: cleanId,
+          problemStatementId: cleanPsId,
+          problemSelectedAt: nowIso,
+          updatedAt: nowIso
+        }, { merge: true }).catch(() => {});
+        db.doc(`problemSelections/${cleanId}`).set({
+          teamId: cleanId,
+          problemStatementId: cleanPsId,
+          selectedAt: nowIso,
+          selectedBy: actorUid,
+          active: true
+        }, { merge: true }).catch(() => {});
+      } catch (e) {}
     }
 
     backendProblemSelections[cleanId] = {
